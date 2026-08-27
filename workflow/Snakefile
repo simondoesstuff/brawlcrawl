@@ -1,0 +1,25 @@
+def fetch_brawl_stars(endpoint: str, output: str) -> str:
+	return f"wget --header=\"Authorization: Bearer $BSTOK\" -qO- 'https://api.brawlstars.com/v1/{endpoint}' | jq '.' > {output}"
+
+
+rule brawlers:
+	output:
+		"data/brawlers.json"
+	shell:
+		fetch_brawl_stars("brawlers", "{output}")
+
+
+rule brawler_names:
+	input:
+		"data/brawlers.json"
+	output:
+		"data/brawler_names.json"
+	shell:
+		"jq '[.items[] | {{name: .name, id: .id}}]' {input} > {output}"
+
+
+rule battlelog:
+	output:
+		"data/battles_{tag}.json"
+	shell:
+		fetch_brawl_stars("players/%23{wildcards.tag}/battlelog", "{output}")

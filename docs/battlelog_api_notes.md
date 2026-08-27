@@ -1,0 +1,5 @@
+- "ranked" matches are actually non-ranked matches, trophy-based
+- ranked matches, such as "soloRanked" use the trophy field for the rank number
+  - For example, "soloRanked" matches may have players with trophies=14, but "ranked" (trophy) matches will have trophies=1310 because the trophies field is overloaded.
+  - Team-queue ranked matches also seem to register as "soloRanked". Non-tropy and non-ranked matches likely have a different identifier without "ranked" in it.
+- legendary 1 is rank number 16
