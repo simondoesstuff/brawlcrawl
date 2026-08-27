@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from brawl.api import Battle, Brawler, Event, Player, _parse_battle
 from brawl.battles import (
     BattleRecord,
     filter_by_min_trophies,
+    filter_since,
     filter_solo_ranked,
     to_battle_records,
     unique_player_tags,
@@ -30,13 +32,18 @@ def make_player(tag: str, trophies: int, brawler_id: int = 1) -> Player:
     return Player(tag=tag, name=tag, brawler=Brawler(id=brawler_id, name="X", power=11, trophies=trophies))
 
 
+_T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
 def make_battle(
     teams: list[list[Player]],
     result: str,
     event_id: int = 1,
     battle_type: str = "soloRanked",
+    battle_time: datetime = _T0,
 ) -> Battle:
     return Battle(
+        battle_time=battle_time,
         event=Event(id=event_id, mode="gemGrab", map="Test Map"),
         mode="gemGrab",
         type=battle_type,
@@ -72,6 +79,26 @@ class TestUniquePlayerTags:
         battle = make_battle(teams=[[p1], [p2]], result="victory")
         assert unique_player_tags([battle], min_trophies=750) == {"#A"}
         assert unique_player_tags([battle], min_trophies=400) == {"#A", "#B"}
+
+
+class TestFilterSince:
+    def test_keeps_battles_at_or_after_cutoff(self):
+        early = make_battle([], "victory", battle_time=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        late  = make_battle([], "victory", battle_time=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        cutoff = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        assert filter_since([early, late], cutoff) == [late]
+
+    def test_inclusive_on_exact_cutoff(self):
+        t = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        battle = make_battle([], "victory", battle_time=t)
+        assert filter_since([battle], t) == [battle]
+
+    def test_real_data_parses_battle_time(self, pjp_battles: list[Battle]):
+        assert all(b.battle_time.tzinfo is not None for b in pjp_battles)
+
+    def test_real_data_cutoff(self, pjp_battles: list[Battle]):
+        newest = max(b.battle_time for b in pjp_battles)
+        assert filter_since(pjp_battles, newest) == [next(b for b in pjp_battles if b.battle_time == newest)]
 
 
 class TestFilterSoloRanked:
@@ -171,6 +198,45 @@ class TestToBattleRecords:
             assert isinstance(r, BattleRecord)
             assert len(r.winning_brawler_ids) > 0
             assert len(r.losing_brawler_ids) > 0
+
+
+class TestBattleId:
+    def _six_player_battle(self, result: str = "victory", t: datetime = _T0) -> Battle:
+        players = [make_player(f"#P{i}", trophies=1000, brawler_id=i) for i in range(6)]
+        return make_battle(teams=[players[:3], players[3:]], result=result, battle_time=t)
+
+    def test_id_is_deterministic(self):
+        battle = self._six_player_battle()
+        r1 = to_battle_records([battle], "#P0")[0]
+        r2 = to_battle_records([battle], "#P0")[0]
+        assert r1.battle_id == r2.battle_id
+
+    def test_same_battle_same_id_regardless_of_owner(self):
+        battle = self._six_player_battle()
+        id_from_p0 = to_battle_records([battle], "#P0")[0].battle_id
+        id_from_p3 = to_battle_records([battle], "#P3")[0].battle_id
+        assert id_from_p0 == id_from_p3
+
+    def test_different_time_different_id(self):
+        t1 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        t2 = datetime(2026, 1, 2, tzinfo=timezone.utc)
+        id1 = to_battle_records([self._six_player_battle(t=t1)], "#P0")[0].battle_id
+        id2 = to_battle_records([self._six_player_battle(t=t2)], "#P0")[0].battle_id
+        assert id1 != id2
+
+    def test_different_players_different_id(self):
+        p_a = [make_player(f"#A{i}", trophies=1000, brawler_id=i) for i in range(6)]
+        p_b = [make_player(f"#B{i}", trophies=1000, brawler_id=i) for i in range(6)]
+        battle_a = make_battle(teams=[p_a[:3], p_a[3:]], result="victory")
+        battle_b = make_battle(teams=[p_b[:3], p_b[3:]], result="victory")
+        id_a = to_battle_records([battle_a], "#A0")[0].battle_id
+        id_b = to_battle_records([battle_b], "#B0")[0].battle_id
+        assert id_a != id_b
+
+    def test_real_data_ids_are_unique(self, pjp_battles: list[Battle]):
+        records = to_battle_records(pjp_battles, OWNER_TAG)
+        ids = [r.battle_id for r in records]
+        assert len(ids) == len(set(ids))
 
 
 class TestComposition:

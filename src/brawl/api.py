@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import TracebackType
 from typing import TypedDict, cast
 
@@ -38,6 +39,7 @@ class _RawBattle(TypedDict, total=False):
 
 
 class _RawBattleItem(TypedDict):
+    battleTime: str
     event: _RawEvent
     battle: _RawBattle
 
@@ -76,6 +78,7 @@ class Event:
 
 @dataclass(frozen=True)
 class Battle:
+    battle_time: datetime
     event: Event
     mode: str
     type: str | None
@@ -103,6 +106,9 @@ def _parse_player(raw: _RawPlayer) -> Player:
     )
 
 
+_BATTLE_TIME_FORMAT = "%Y%m%dT%H%M%S.%fZ"
+
+
 def _parse_battle(raw: _RawBattleItem) -> Battle:
     event_raw = raw.get("event") or {}
     event = Event(
@@ -114,6 +120,7 @@ def _parse_battle(raw: _RawBattleItem) -> Battle:
     teams_raw = battle.get("teams")
     players_raw = battle.get("players")
     return Battle(
+        battle_time=datetime.strptime(raw["battleTime"], _BATTLE_TIME_FORMAT).replace(tzinfo=timezone.utc),
         event=event,
         mode=battle.get("mode") or "",
         type=battle.get("type"),
