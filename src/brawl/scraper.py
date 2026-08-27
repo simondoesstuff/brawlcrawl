@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -57,6 +58,7 @@ class Scraper:
     _frontier_cap: int
     _min_trophies: int
     _since: datetime | None
+    _request_interval: float
 
     def __init__(
         self,
@@ -65,20 +67,30 @@ class Scraper:
         frontier_cap: int = 200,
         min_trophies: int = 0,
         since: datetime | None = None,
+        request_interval: float = 0.0,
     ) -> None:
         self._client = client
         self._dataset = dataset
         self._frontier_cap = frontier_cap
         self._min_trophies = min_trophies
         self._since = since
+        self._request_interval = request_interval
 
     def step(self) -> int:
-        """One BFS extension step. Returns count of new unique battles seen."""
+        """One BFS extension step. Returns count of new unique battles seen.
+
+        Crash-safe: if get_battlelog raises mid-loop, seen_battle_ids and stats
+        are already partially updated but the frontier drain (below) hasn't run,
+        so processed tags remain in frontier. On the next run they'll be re-queried
+        and their battles deduped via seen_battle_ids — no double-counting.
+        """
         tags = list(self._dataset.frontier)[: self._frontier_cap]
         all_discovered: set[str] = set()
         new_battle_count = 0
 
         for tag in tags:
+            if self._request_interval > 0:
+                time.sleep(self._request_interval)
             battles = self._client.get_battlelog(tag)
             result = consume(tag, battles, self._dataset.seen_battle_ids, self._min_trophies, self._since)
 

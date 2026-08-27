@@ -6,6 +6,10 @@ from typing import TypedDict, cast
 
 import httpx
 
+
+class BrawlApiError(Exception):
+    """Raised when the Brawl Stars API returns an unparseable response."""
+
 _BASE_URL = "https://api.brawlstars.com/v1"
 
 
@@ -155,8 +159,13 @@ class BrawlStarsClient:
         encoded = tag.lstrip("#")
         response = self._client.get(f"/players/%23{encoded}/battlelog")
         _ = response.raise_for_status()
-        data = cast(_RawBattlelogResponse, response.json())
-        return [_parse_battle(item) for item in data["items"]]
+        try:
+            data = cast(_RawBattlelogResponse, response.json())
+            return [_parse_battle(item) for item in data["items"]]
+        except Exception as exc:
+            raise BrawlApiError(
+                f"failed to parse battlelog for {tag}: {response.text[:500]}"
+            ) from exc
 
     def get_brawlers(self) -> list[_RawBrawler]:
         response = self._client.get("/brawlers")

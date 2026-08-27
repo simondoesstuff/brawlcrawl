@@ -5,7 +5,7 @@ Run separately from the main suite: pytest tests/integration
 import pytest
 from pytest_httpx import HTTPXMock
 
-from brawl.api import Battle, BrawlStarsClient
+from brawl.api import Battle, BrawlApiError, BrawlStarsClient
 
 _BATTLELOG_RESPONSE = {
     "items": [
@@ -116,6 +116,17 @@ class TestGetBattlelog:
     def test_raises_on_http_error(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=403)
         with pytest.raises(Exception):
+            client.get_battlelog("#OWNER")
+
+    def test_raises_brawl_api_error_on_missing_items_key(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(json={"status": 200, "message": "ok"})
+        with pytest.raises(BrawlApiError):
+            client.get_battlelog("#OWNER")
+
+    def test_raises_brawl_api_error_on_malformed_battle(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
+        # Missing required battleTime field
+        httpx_mock.add_response(json={"items": [{"event": {}, "battle": {}}]})
+        with pytest.raises(BrawlApiError):
             client.get_battlelog("#OWNER")
 
 
