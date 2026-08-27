@@ -192,6 +192,14 @@ class TestScraper:
         Scraper(client, db, frontier_cap=2).step()
         assert client.get_battlelog.call_count == 2
 
+    def test_frontier_cap_retains_unprocessed_tags(self):
+        # 3 tags in frontier, cap=2: the unprocessed tag must survive into next step
+        client = MagicMock()
+        client.get_battlelog.return_value = []
+        db = Dataset.from_seed({"#A", "#B", "#C"})
+        Scraper(client, db, frontier_cap=2).step()
+        assert len(db.frontier) == 1  # the uncapped tag is still queued
+
     def test_seen_tags_grows_after_step(self):
         a, b = _ab_teams()
         client = MagicMock()

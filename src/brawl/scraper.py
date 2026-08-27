@@ -92,9 +92,10 @@ class Scraper:
 
             all_discovered |= result.discovered_tags
 
-        next_frontier = all_discovered - self._dataset.seen_tags
-        self._dataset.seen_tags |= next_frontier
-        self._dataset.frontier = next_frontier
+        new_tags = all_discovered - self._dataset.seen_tags
+        self._dataset.frontier -= set(tags)
+        self._dataset.frontier |= new_tags
+        self._dataset.seen_tags |= new_tags
         return new_battle_count
 
     def run(self, steps: int, save_path: Path | None = None) -> None:
