@@ -8,6 +8,7 @@ requires-python = ">=3.13"
 dependencies = [
   "einx>=0.4.3",
   "equinox>=0.13.8",
+  "httpx>=0.28.1",
   "jax>=0.11.1",
   "jax[cuda]>=0.11.1 ; sys_platform == 'linux'",
   "jaxtyping>=0.3.11",
@@ -34,3 +35,12 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 jpc = { git = "https://github.com/simondoesstuff/jpc" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--ignore=tests/integration"
+
+[dependency-groups]
+dev = [
+    "pytest-httpx>=0.36.2",
+]
