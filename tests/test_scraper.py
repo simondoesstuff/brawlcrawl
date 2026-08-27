@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from brawl.api import Battle, BrawlApiError, Brawler, Event, Player
+from brawl.api import Battle, BrawlApiError, Brawler, Event, Player, TagInaccessibleError
 from brawl.dataset import Composition, Dataset, WinLoss
 from brawl.scraper import Scraper, consume
 
@@ -251,6 +251,57 @@ class TestScraper:
         db = Dataset.from_seed({"#A"})
         with pytest.raises(BrawlApiError):
             Scraper(client, db).step()
+
+    def test_inaccessible_tag_added_to_bad_tags(self):
+        client = MagicMock()
+        client.get_battlelog.side_effect = TagInaccessibleError("404 for #DEAD")
+        db = Dataset.from_seed({"#DEAD"})
+        Scraper(client, db).step()
+        assert "#DEAD" in db.bad_tags
+
+    def test_inaccessible_tag_added_to_seen_tags(self):
+        client = MagicMock()
+        client.get_battlelog.side_effect = TagInaccessibleError("404 for #DEAD")
+        db = Dataset.from_seed({"#DEAD"})
+        Scraper(client, db).step()
+        assert "#DEAD" in db.seen_tags
+
+    def test_inaccessible_tag_not_requeued(self):
+        """A 404 tag must not reappear in the frontier after the step."""
+        client = MagicMock()
+        client.get_battlelog.side_effect = TagInaccessibleError("404 for #DEAD")
+        db = Dataset.from_seed({"#DEAD"})
+        Scraper(client, db).step()
+        assert "#DEAD" not in db.frontier
+
+    def test_too_many_bad_tags_raises(self):
+        client = MagicMock()
+        client.get_battlelog.side_effect = TagInaccessibleError("404")
+        db = Dataset.from_seed({f"#{i}" for i in range(12)})
+        with pytest.raises(RuntimeError, match="possible API block"):
+            Scraper(client, db, max_bad_per_step=10).step()
+
+    def test_bad_tags_at_threshold_does_not_raise(self):
+        client = MagicMock()
+        client.get_battlelog.side_effect = TagInaccessibleError("404")
+        db = Dataset.from_seed({f"#{i}" for i in range(10)})
+        Scraper(client, db, max_bad_per_step=10).step()  # exactly 10: no raise
+
+    def test_inaccessible_tag_does_not_crash_step(self):
+        """Step continues past a 404 tag and processes subsequent tags."""
+        a, b = _ab_teams()
+
+        def side_effect(tag: str) -> list[Battle]:
+            if tag == "#DEAD":
+                raise TagInaccessibleError("404")
+            return [make_battle([a, b], "victory")]
+
+        client = MagicMock()
+        client.get_battlelog.side_effect = side_effect
+        db = Dataset.from_seed({"#DEAD", a[0].tag})
+        n = Scraper(client, db).step()
+        assert n == 1
+        assert db.bad_tags == {"#DEAD"}
 
     def test_crash_mid_step_leaves_frontier_intact(self):
         """Processed tags stay in frontier on crash; re-querying them is safe via seen_battle_ids dedup."""

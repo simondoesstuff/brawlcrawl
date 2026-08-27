@@ -16,6 +16,7 @@ class _DatasetJson(TypedDict):
     seen_tags: list[str]
     frontier: list[str]
     seen_battle_ids: list[str]
+    bad_tags: list[str]
     stats: list[_StatEntry]
 
 
@@ -52,6 +53,7 @@ class Dataset:
     seen_tags: set[str]
     frontier: set[str]
     seen_battle_ids: set[str]
+    bad_tags: set[str] = field(default_factory=set)
     stats: dict[Composition, WinLoss] = field(default_factory=dict)
 
     @classmethod
@@ -60,7 +62,6 @@ class Dataset:
             seen_tags=set(seed_tags),
             frontier=set(seed_tags),
             seen_battle_ids=set(),
-            stats={},
         )
 
     def save(self, path: Path) -> None:
@@ -68,6 +69,7 @@ class Dataset:
             "seen_tags": sorted(self.seen_tags),
             "frontier": sorted(self.frontier),
             "seen_battle_ids": sorted(self.seen_battle_ids),
+            "bad_tags": sorted(self.bad_tags),
             "stats": [
                 {
                     "event_id": comp.event_id,
@@ -96,5 +98,6 @@ class Dataset:
             seen_tags=set(data["seen_tags"]),
             frontier=set(data["frontier"]),
             seen_battle_ids=set(data["seen_battle_ids"]),
+            bad_tags=set(data.get("bad_tags", [])),
             stats=stats,
         )

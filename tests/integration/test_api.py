@@ -5,7 +5,7 @@ Run separately from the main suite: pytest tests/integration
 import pytest
 from pytest_httpx import HTTPXMock
 
-from brawl.api import Battle, BrawlApiError, BrawlStarsClient
+from brawl.api import Battle, BrawlApiError, BrawlStarsClient, TagInaccessibleError
 
 _BATTLELOG_RESPONSE = {
     "items": [
@@ -113,8 +113,18 @@ class TestGetBattlelog:
         battles = client.get_battlelog("OWNER")
         assert len(battles) == 2
 
-    def test_raises_on_http_error(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
+    def test_raises_tag_inaccessible_on_404(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(status_code=404)
+        with pytest.raises(TagInaccessibleError):
+            client.get_battlelog("#OWNER")
+
+    def test_raises_tag_inaccessible_on_403(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=403)
+        with pytest.raises(TagInaccessibleError):
+            client.get_battlelog("#OWNER")
+
+    def test_raises_on_http_error(self, client: BrawlStarsClient, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(status_code=500)
         with pytest.raises(Exception):
             client.get_battlelog("#OWNER")
 

@@ -10,6 +10,10 @@ import httpx
 class BrawlApiError(Exception):
     """Raised when the Brawl Stars API returns an unparseable response."""
 
+
+class TagInaccessibleError(BrawlApiError):
+    """Raised on 404/403 — tag exists in battle records but has no accessible battlelog."""
+
 _BASE_URL = "https://api.brawlstars.com/v1"
 
 
@@ -158,6 +162,8 @@ class BrawlStarsClient:
     def get_battlelog(self, tag: str) -> list[Battle]:
         encoded = tag.lstrip("#")
         response = self._client.get(f"/players/%23{encoded}/battlelog")
+        if response.status_code in (403, 404):
+            raise TagInaccessibleError(f"{response.status_code} for tag {tag}")
         _ = response.raise_for_status()
         try:
             data = cast(_RawBattlelogResponse, response.json())

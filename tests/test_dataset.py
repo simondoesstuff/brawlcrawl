@@ -49,6 +49,7 @@ class TestDataset:
         assert db.seen_tags == {"#A", "#B"}
         assert db.frontier == {"#A", "#B"}
         assert db.seen_battle_ids == set()
+        assert db.bad_tags == set()
         assert db.stats == {}
 
     def test_save_load_roundtrip(self, tmp_path: Path):
@@ -79,7 +80,16 @@ class TestDataset:
         assert "seen_tags" in data
         assert "frontier" in data
         assert "seen_battle_ids" in data
+        assert "bad_tags" in data
         assert "stats" in data
+
+    def test_bad_tags_roundtrip(self, tmp_path: Path):
+        db = Dataset.from_seed({"#A"})
+        db.bad_tags.add("#DEAD")
+        path = tmp_path / "dataset.json"
+        db.save(path)
+        db2 = Dataset.load(path)
+        assert db2.bad_tags == {"#DEAD"}
 
     def test_stats_win_loss_preserved(self, tmp_path: Path):
         db = Dataset.from_seed(set())

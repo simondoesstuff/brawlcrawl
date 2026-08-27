@@ -5,7 +5,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from brawl.api import Battle, BrawlStarsClient
+from brawl.api import Battle, BrawlStarsClient, TagInaccessibleError
 from brawl.battles import filter_by_min_trophies, filter_since, filter_solo_ranked, to_battle_records, unique_player_tags
 from brawl.dataset import Composition, Dataset, WinLoss
 
@@ -61,6 +61,7 @@ class Scraper:
     _min_trophies: int
     _since: datetime | None
     _request_interval: float
+    _max_bad_per_step: int
 
     def __init__(
         self,
@@ -70,6 +71,7 @@ class Scraper:
         min_trophies: int = 0,
         since: datetime | None = None,
         request_interval: float = 0.0,
+        max_bad_per_step: int = 10,
     ) -> None:
         self._client = client
         self._dataset = dataset
@@ -77,6 +79,7 @@ class Scraper:
         self._min_trophies = min_trophies
         self._since = since
         self._request_interval = request_interval
+        self._max_bad_per_step = max_bad_per_step
 
     def step(self) -> int:
         """One BFS extension step. Returns count of new unique battles seen.
@@ -89,11 +92,22 @@ class Scraper:
         tags = list(self._dataset.frontier)[: self._frontier_cap]
         all_discovered: set[str] = set()
         new_battle_count = 0
+        new_bad_count = 0
 
         for tag in tqdm(tags, desc="scraping", unit="tag", leave=False):
             if self._request_interval > 0:
                 time.sleep(self._request_interval)
-            battles = self._client.get_battlelog(tag)
+            try:
+                battles = self._client.get_battlelog(tag)
+            except TagInaccessibleError:
+                self._dataset.bad_tags.add(tag)
+                self._dataset.seen_tags.add(tag)
+                new_bad_count += 1
+                if new_bad_count > self._max_bad_per_step:
+                    raise RuntimeError(
+                        f"{new_bad_count} inaccessible tags in one step — possible API block. Halting."
+                    )
+                continue
             result = consume(tag, battles, self._dataset.seen_battle_ids, self._min_trophies, self._since)
 
             self._dataset.seen_battle_ids |= result.new_battle_ids
