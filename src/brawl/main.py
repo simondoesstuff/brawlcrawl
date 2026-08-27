@@ -87,6 +87,123 @@ def dataset_extend(
         scraper.run(steps=steps, save_path=dataset)
 
 
+@app.command()
+def dataset_audit(
+    dataset: Annotated[Path, typer.Argument(help="Path to dataset JSON")],
+) -> None:
+    """Print stats and metrics for an existing dataset."""
+    import statistics
+
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich import box
+
+    from brawl.dataset import Dataset
+
+    console = Console()
+    db = Dataset.load(dataset)
+
+    # --- derived stats ---
+    samples = [wl.total for wl in db.stats.values()]
+    total_battles = sum(samples)
+    n_comps = len(db.stats)
+
+    unique_brawlers: set[int] = set()
+    for comp in db.stats:
+        unique_brawlers |= comp.team_a_ids | comp.team_b_ids
+
+    # per-event aggregates
+    from collections import defaultdict
+    event_comps: dict[int, int] = defaultdict(int)
+    event_battles: dict[int, int] = defaultdict(int)
+    for comp, wl in db.stats.items():
+        event_comps[comp.event_id] += 1
+        event_battles[comp.event_id] += wl.total
+
+    # sample-count buckets
+    buckets = {"1": 0, "2–5": 0, "6–10": 0, "11–50": 0, "51+": 0}
+    for s in samples:
+        if s == 1:
+            buckets["1"] += 1
+        elif s <= 5:
+            buckets["2–5"] += 1
+        elif s <= 10:
+            buckets["6–10"] += 1
+        elif s <= 50:
+            buckets["11–50"] += 1
+        else:
+            buckets["51+"] += 1
+
+    # win-rate distribution (only comps with ≥2 observations)
+    win_rates = [
+        wl.a_wins / wl.total for wl in db.stats.values() if wl.total >= 2
+    ]
+    wr_balanced = sum(1 for w in win_rates if 0.4 <= w <= 0.6)
+    wr_skewed   = sum(1 for w in win_rates if (0.2 <= w < 0.4) or (0.6 < w <= 0.8))
+    wr_extreme  = sum(1 for w in win_rates if w < 0.2 or w > 0.8)
+
+    # --- Overview panel ---
+    overview = Table.grid(padding=(0, 2))
+    overview.add_column(style="bold cyan")
+    overview.add_column(justify="right")
+    overview.add_row("Player tags seen",   f"{len(db.seen_tags):,}")
+    overview.add_row("Frontier remaining", f"{len(db.frontier):,}")
+    overview.add_row("Battles recorded",   f"{total_battles:,}")
+    overview.add_row("Compositions",       f"{n_comps:,}")
+    overview.add_row("Bad tags",           f"{len(db.bad_tags):,}")
+    overview.add_row("Unique brawlers",    f"{len(unique_brawlers):,}")
+    overview.add_row("Unique events",      f"{len(event_comps):,}")
+
+    console.print(Panel(overview, title=f"[bold]Dataset: {dataset}[/bold]", box=box.ROUNDED))
+
+    # --- Samples-per-composition table ---
+    if samples:
+        samp_table = Table(title="Samples per Composition", box=box.SIMPLE_HEAD, show_edge=False)
+        samp_table.add_column("Bucket", style="cyan")
+        samp_table.add_column("Count", justify="right")
+        samp_table.add_column("Share", justify="right")
+        for label, count in buckets.items():
+            pct = count / n_comps * 100 if n_comps else 0
+            samp_table.add_row(label, f"{count:,}", f"{pct:.1f}%")
+
+        stat_table = Table.grid(padding=(0, 2))
+        stat_table.add_column(style="bold cyan")
+        stat_table.add_column(justify="right")
+        stat_table.add_row("Min",    f"{min(samples):,}")
+        stat_table.add_row("Median", f"{statistics.median(samples):,.1f}")
+        stat_table.add_row("Mean",   f"{statistics.mean(samples):,.2f}")
+        stat_table.add_row("Max",    f"{max(samples):,}")
+
+        console.print(samp_table)
+        console.print(Panel(stat_table, title="Sample Count Stats", box=box.ROUNDED))
+
+    # --- Win-rate distribution ---
+    if win_rates:
+        wr_table = Table(title="Win-Rate Distribution (comps with ≥2 samples)", box=box.SIMPLE_HEAD, show_edge=False)
+        wr_table.add_column("Category", style="cyan")
+        wr_table.add_column("Range", justify="center")
+        wr_table.add_column("Count", justify="right")
+        wr_table.add_column("Share", justify="right")
+        n_wr = len(win_rates)
+        wr_table.add_row("Balanced", "40–60%", f"{wr_balanced:,}", f"{wr_balanced/n_wr*100:.1f}%")
+        wr_table.add_row("Skewed",   "20–40% / 60–80%", f"{wr_skewed:,}", f"{wr_skewed/n_wr*100:.1f}%")
+        wr_table.add_row("Extreme",  "<20% / >80%", f"{wr_extreme:,}", f"{wr_extreme/n_wr*100:.1f}%")
+        console.print(wr_table)
+
+    # --- Per-event breakdown ---
+    if event_comps:
+        ev_table = Table(title="Per-Event Breakdown", box=box.SIMPLE_HEAD, show_edge=False)
+        ev_table.add_column("Event ID", style="cyan", justify="right")
+        ev_table.add_column("Compositions", justify="right")
+        ev_table.add_column("Battles", justify="right")
+        ev_table.add_column("Avg Samples/Comp", justify="right")
+        for eid in sorted(event_comps, key=lambda e: event_battles[e], reverse=True):
+            avg = event_battles[eid] / event_comps[eid]
+            ev_table.add_row(str(eid), f"{event_comps[eid]:,}", f"{event_battles[eid]:,}", f"{avg:.2f}")
+        console.print(ev_table)
+
+
 def main() -> None:
     app()
 
