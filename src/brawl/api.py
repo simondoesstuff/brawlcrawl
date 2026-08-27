@@ -18,9 +18,11 @@ class _RawBrawler(TypedDict):
     trophies: int
 
 
-class _RawPlayer(TypedDict):
+class _RawPlayerRequired(TypedDict):
     tag: str
     name: str
+
+class _RawPlayer(_RawPlayerRequired, total=False):
     brawler: _RawBrawler
 
 
@@ -98,12 +100,19 @@ def _parse_brawler(raw: _RawBrawler) -> Brawler:
     )
 
 
-def _parse_player(raw: _RawPlayer) -> Player:
+def _parse_player(raw: _RawPlayer) -> Player | None:
+    brawler_raw = raw.get("brawler")
+    if brawler_raw is None:
+        return None
     return Player(
         tag=raw["tag"],
         name=raw["name"],
-        brawler=_parse_brawler(raw["brawler"]),
+        brawler=_parse_brawler(brawler_raw),
     )
+
+
+def _parse_players(raws: list[_RawPlayer]) -> list[Player]:
+    return [p for raw in raws if (p := _parse_player(raw)) is not None]
 
 
 _BATTLE_TIME_FORMAT = "%Y%m%dT%H%M%S.%fZ"
@@ -125,8 +134,8 @@ def _parse_battle(raw: _RawBattleItem) -> Battle:
         mode=battle.get("mode") or "",
         type=battle.get("type"),
         result=battle.get("result"),
-        teams=[[_parse_player(p) for p in team] for team in teams_raw] if teams_raw else None,
-        players=[_parse_player(p) for p in players_raw] if players_raw else None,
+        teams=[_parse_players(team) for team in teams_raw] if teams_raw else None,
+        players=_parse_players(players_raw) if players_raw else None,
     )
 
 

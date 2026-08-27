@@ -9,6 +9,8 @@
 - `workflow/` — Snakemake pipeline; fetches raw JSON from the Brawl Stars API (`$BSTOK`) into `data/`
 - `src/brawl/api.py` — REST client; the only place that touches HTTP or JSON; returns typed dataclasses
 - `src/brawl/battles.py` — composable filters and converters over battle lists
+- `src/brawl/dataset.py` — `Dataset` state (seen tags, frontier, stats, battle hash store); serializes to JSON
+- `src/brawl/scraper.py` — pure `consume()` function; `Scraper` drives iterative BFS extension steps
 - `tests/` — unit tests (no network); `tests/integration/` — API client tests using mocked HTTP
 
 ## Key domain notes (see `battlelog_api_notes.md`)
