@@ -1,6 +1,9 @@
 _default:
 	@just --list
 
+run *args="--help":
+	uv run brawl {{args}}
+
 typecheck path='src':
 	uv run basedpyright {{path}}
 

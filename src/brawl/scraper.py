@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from tqdm import tqdm
+
 from brawl.api import Battle, BrawlStarsClient
 from brawl.battles import filter_by_min_trophies, filter_since, filter_solo_ranked, to_battle_records, unique_player_tags
 from brawl.dataset import Composition, Dataset, WinLoss
@@ -88,7 +90,7 @@ class Scraper:
         all_discovered: set[str] = set()
         new_battle_count = 0
 
-        for tag in tags:
+        for tag in tqdm(tags, desc="scraping", unit="tag", leave=False):
             if self._request_interval > 0:
                 time.sleep(self._request_interval)
             battles = self._client.get_battlelog(tag)

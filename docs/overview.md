@@ -12,6 +12,7 @@
 - `src/brawl/dataset.py` — `Dataset` state (seen tags, frontier, stats, battle hash store); serializes to JSON
 - `src/brawl/scraper.py` — pure `consume()` function; `Scraper` drives iterative BFS extension steps
 - `tests/` — unit tests (no network); `tests/integration/` — API client tests using mocked HTTP
+- `docs/dataset_generation.md` — usage guide for the dataset scraper
 
 ## Key domain notes (see `battlelog_api_notes.md`)
 
