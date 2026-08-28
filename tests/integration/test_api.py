@@ -5,7 +5,7 @@ Run separately from the main suite: pytest tests/integration
 import pytest
 from pytest_httpx import HTTPXMock
 
-from brawl.api import Battle, BrawlApiError, BrawlStarsClient, TagInaccessibleError
+from crawl.api import Battle, BrawlApiError, BrawlStarsClient, TagInaccessibleError
 
 _BATTLELOG_RESPONSE = {
     "items": [

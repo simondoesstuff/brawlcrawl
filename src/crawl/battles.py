@@ -2,7 +2,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 
-from brawl.api import Battle, Player
+from crawl.api import Battle, Player
 
 
 def _all_players(battle: Battle) -> list[Player]:

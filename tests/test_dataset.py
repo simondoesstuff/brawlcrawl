@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from brawl.dataset import Composition, Dataset, WinLoss
+from crawl.dataset import Composition, Dataset, WinLoss
 
 
 class TestComposition:

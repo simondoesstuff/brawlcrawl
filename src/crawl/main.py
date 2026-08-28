@@ -35,9 +35,9 @@ def dataset_init(
     ] = None,
 ) -> None:
     """Initialize a new dataset from seed player tags and run BFS steps."""
-    from brawl.api import BrawlStarsClient
-    from brawl.dataset import Dataset
-    from brawl.scraper import Scraper
+    from crawl.api import BrawlStarsClient
+    from crawl.dataset import Dataset
+    from crawl.scraper import Scraper
 
     save_path = output or Path("data/dataset.json")
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,9 +70,9 @@ def dataset_extend(
     ] = None,
 ) -> None:
     """Extend an existing dataset with more BFS steps."""
-    from brawl.api import BrawlStarsClient
-    from brawl.dataset import Dataset
-    from brawl.scraper import Scraper
+    from crawl.api import BrawlStarsClient
+    from crawl.dataset import Dataset
+    from crawl.scraper import Scraper
 
     with BrawlStarsClient() as client:
         db = Dataset.load(dataset)
@@ -99,7 +99,7 @@ def dataset_audit(
     from rich.table import Table
     from rich import box
 
-    from brawl.dataset import Dataset
+    from crawl.dataset import Dataset
 
     console = Console()
     db = Dataset.load(dataset)

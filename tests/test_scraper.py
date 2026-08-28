@@ -3,9 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from brawl.api import Battle, BrawlApiError, Brawler, Event, Player, TagInaccessibleError
-from brawl.dataset import Composition, Dataset, WinLoss
-from brawl.scraper import Scraper, consume
+from crawl.api import Battle, BrawlApiError, Brawler, Event, Player, TagInaccessibleError
+from crawl.dataset import Composition, Dataset, WinLoss
+from crawl.scraper import Scraper, consume
 
 _T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 _T1 = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -232,7 +232,7 @@ class TestScraper:
         client = MagicMock()
         client.get_battlelog.return_value = []
         db = Dataset.from_seed({"#A", "#B", "#C"})
-        with patch("brawl.scraper.time") as mock_time:
+        with patch("crawl.scraper.time") as mock_time:
             Scraper(client, db, frontier_cap=3, request_interval=0.5).step()
         assert mock_time.sleep.call_count == 3
         mock_time.sleep.assert_called_with(0.5)
@@ -241,7 +241,7 @@ class TestScraper:
         client = MagicMock()
         client.get_battlelog.return_value = []
         db = Dataset.from_seed({"#A"})
-        with patch("brawl.scraper.time") as mock_time:
+        with patch("crawl.scraper.time") as mock_time:
             Scraper(client, db, request_interval=0.0).step()
         mock_time.sleep.assert_not_called()
 

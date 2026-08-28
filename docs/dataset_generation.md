@@ -6,9 +6,9 @@ The scraper builds a training dataset by BFS-crawling player battlelogs. Each st
 
 ```python
 from pathlib import Path
-from brawl.api import BrawlStarsClient
-from brawl.dataset import Dataset
-from brawl.scraper import Scraper
+from crawl.api import BrawlStarsClient
+from crawl.dataset import Dataset
+from crawl.scraper import Scraper
 
 path = Path("data/dataset.json")
 

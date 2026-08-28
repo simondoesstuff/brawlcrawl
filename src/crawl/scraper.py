@@ -5,9 +5,9 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from brawl.api import Battle, BrawlStarsClient, TagInaccessibleError
-from brawl.battles import filter_by_min_trophies, filter_since, filter_solo_ranked, to_battle_records, unique_player_tags
-from brawl.dataset import Composition, Dataset, WinLoss
+from crawl.api import Battle, BrawlStarsClient, TagInaccessibleError
+from crawl.battles import filter_by_min_trophies, filter_since, filter_solo_ranked, to_battle_records, unique_player_tags
+from crawl.dataset import Composition, Dataset, WinLoss
 
 
 @dataclass

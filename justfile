@@ -2,7 +2,7 @@ _default:
 	@just --list
 
 run *args="--help":
-	uv run brawl {{args}}
+	uv run crawl {{args}}
 
 typecheck path='src':
 	uv run basedpyright {{path}}

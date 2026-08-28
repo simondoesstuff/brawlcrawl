@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from brawl.api import Battle, Brawler, Event, Player, _parse_battle
-from brawl.battles import (
+from crawl.api import Battle, Brawler, Event, Player, _parse_battle
+from crawl.battles import (
     BattleRecord,
     filter_by_min_trophies,
     filter_since,

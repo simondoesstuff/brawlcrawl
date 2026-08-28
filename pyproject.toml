@@ -29,11 +29,14 @@ dependencies = [
 ]
 
 [project.scripts]
-brawl = "brawl.main:main"
+crawl = "crawl.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "crawl"
 
 [tool.uv.sources]
 jpc = { git = "https://github.com/simondoesstuff/jpc" }
@@ -44,5 +47,6 @@ addopts = "--ignore=tests/integration"
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.39.10",
     "pytest-httpx>=0.36.2",
 ]
