@@ -30,13 +30,14 @@ dependencies = [
 
 [project.scripts]
 crawl = "crawl.main:main"
+geneus = "geneus.train:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "crawl"
+module-name = ["crawl", "geneus"]
 
 [tool.uv.sources]
 jpc = { git = "https://github.com/simondoesstuff/jpc" }

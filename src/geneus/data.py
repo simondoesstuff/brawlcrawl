@@ -1,0 +1,209 @@
+"""Data loading, feature extraction, and train/val splitting for the ML pipeline."""
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import jax
+import numpy as np
+
+_DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
+
+@dataclass(frozen=True)
+class Vocabs:
+    event_to_idx: dict[int, int]
+    mode_to_idx: dict[int, int]
+    char_to_idx: dict[int, int]
+    class_to_idx: dict[str, int]
+    range_to_idx: dict[str, int]
+    destruct_to_idx: dict[str, int]
+
+    @property
+    def n_events(self) -> int:
+        return len(self.event_to_idx)
+
+    @property
+    def n_modes(self) -> int:
+        return len(self.mode_to_idx)
+
+    @property
+    def n_chars(self) -> int:
+        return len(self.char_to_idx)
+
+    @property
+    def n_classes(self) -> int:
+        return len(self.class_to_idx)
+
+    @property
+    def n_ranges(self) -> int:
+        return len(self.range_to_idx)
+
+    @property
+    def n_destructs(self) -> int:
+        return len(self.destruct_to_idx)
+
+
+@dataclass
+class BattleArrays:
+    """Parallel numpy arrays; index i is one unique team composition."""
+
+    event_idx: np.ndarray   # [N] int32
+    mode_idx: np.ndarray    # [N] int32
+    team_a_chars: np.ndarray  # [N, 3] int32
+    team_a_meta: np.ndarray   # [N, 3, 3] int32  — axis-2: (class, range, destruct)
+    team_b_chars: np.ndarray  # [N, 3] int32
+    team_b_meta: np.ndarray   # [N, 3, 3] int32
+    a_wins: np.ndarray      # [N] int32
+    totals: np.ndarray      # [N] int32
+
+    def __len__(self) -> int:
+        return len(self.event_idx)
+
+
+# Register as a JAX pytree so BattleArrays can cross jit/vmap boundaries.
+jax.tree_util.register_pytree_node(
+    BattleArrays,
+    lambda b: (
+        [b.event_idx, b.mode_idx, b.team_a_chars, b.team_a_meta,
+         b.team_b_chars, b.team_b_meta, b.a_wins, b.totals],
+        None,
+    ),
+    lambda _, xs: BattleArrays(*xs),
+)
+
+
+def load_vocabs(data_dir: Path = _DATA_DIR) -> Vocabs:
+    events: list[dict] = json.loads((data_dir / "events.json").read_text())
+    event_to_idx = {e["id"]: i for i, e in enumerate(sorted(events, key=lambda x: x["id"]))}
+    mode_to_idx = {m: i for i, m in enumerate(sorted({e["modeId"] for e in events}))}
+
+    brawler_class: list[dict] = json.loads((data_dir / "brawler_class.json").read_text())
+    char_to_idx = {x["id"]: i for i, x in enumerate(sorted(brawler_class, key=lambda x: x["id"]))}
+    class_to_idx = {c: i for i, c in enumerate(sorted({x["class"] for x in brawler_class}))}
+
+    brawler_range: list[dict] = json.loads((data_dir / "brawler_effective_range.json").read_text())
+    range_to_idx = {r: i for i, r in enumerate(sorted({x["range"] for x in brawler_range}))}
+
+    brawler_destruct: list[dict] = json.loads((data_dir / "brawler_destruction.json").read_text())
+    destruct_to_idx = {d: i for i, d in enumerate(sorted({x["destruction"] for x in brawler_destruct}))}
+
+    return Vocabs(
+        event_to_idx=event_to_idx,
+        mode_to_idx=mode_to_idx,
+        char_to_idx=char_to_idx,
+        class_to_idx=class_to_idx,
+        range_to_idx=range_to_idx,
+        destruct_to_idx=destruct_to_idx,
+    )
+
+
+def _build_char_meta_lookup(
+    data_dir: Path,
+    vocabs: Vocabs,
+) -> dict[int, tuple[int, int, int]]:
+    """Map brawler_id -> (class_idx, range_idx, destruct_idx). Raises if any are missing."""
+    brawler_class: list[dict] = json.loads((data_dir / "brawler_class.json").read_text())
+    brawler_range: list[dict] = json.loads((data_dir / "brawler_effective_range.json").read_text())
+    brawler_destruct: list[dict] = json.loads((data_dir / "brawler_destruction.json").read_text())
+
+    class_map = {x["id"]: vocabs.class_to_idx[x["class"]] for x in brawler_class}
+    range_map = {x["id"]: vocabs.range_to_idx[x["range"]] for x in brawler_range}
+    destruct_map = {x["id"]: vocabs.destruct_to_idx[x["destruction"]] for x in brawler_destruct}
+
+    all_ids = set(class_map) | set(range_map) | set(destruct_map)
+    missing = {
+        bid for bid in all_ids
+        if bid not in class_map or bid not in range_map or bid not in destruct_map
+    }
+    if missing:
+        raise ValueError(f"Brawlers missing metadata: {missing}")
+
+    return {bid: (class_map[bid], range_map[bid], destruct_map[bid]) for bid in all_ids}
+
+
+def load_battles(
+    data_dir: Path = _DATA_DIR,
+    *,
+    vocabs: Vocabs | None = None,
+    battles_file: str = "crawl_leg1_20260827.json",
+) -> BattleArrays:
+    if vocabs is None:
+        vocabs = load_vocabs(data_dir)
+
+    char_meta = _build_char_meta_lookup(data_dir, vocabs)
+
+    events: list[dict] = json.loads((data_dir / "events.json").read_text())
+    event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
+
+    raw: dict = json.loads((data_dir / battles_file).read_text())
+    battles: list[dict] = [b for b in raw["stats"] if b["event_id"] in vocabs.event_to_idx]
+
+    for b in battles:
+        for cid in b["team_a"] + b["team_b"]:
+            if cid not in char_meta:
+                raise ValueError(f"Brawler {cid} has no metadata")
+            if cid not in vocabs.char_to_idx:
+                raise ValueError(f"Brawler {cid} not in char vocab")
+
+    N = len(battles)
+    event_idx = np.empty(N, dtype=np.int32)
+    mode_idx = np.empty(N, dtype=np.int32)
+    team_a_chars = np.empty((N, 3), dtype=np.int32)
+    team_a_meta = np.empty((N, 3, 3), dtype=np.int32)
+    team_b_chars = np.empty((N, 3), dtype=np.int32)
+    team_b_meta = np.empty((N, 3, 3), dtype=np.int32)
+    a_wins_arr = np.empty(N, dtype=np.int32)
+    totals_arr = np.empty(N, dtype=np.int32)
+
+    for i, b in enumerate(battles):
+        eid = b["event_id"]
+        event_idx[i] = vocabs.event_to_idx[eid]
+        mode_idx[i] = vocabs.mode_to_idx[event_mode[eid]]
+
+        for j, cid in enumerate(b["team_a"]):
+            team_a_chars[i, j] = vocabs.char_to_idx[cid]
+            team_a_meta[i, j] = char_meta[cid]
+
+        for j, cid in enumerate(b["team_b"]):
+            team_b_chars[i, j] = vocabs.char_to_idx[cid]
+            team_b_meta[i, j] = char_meta[cid]
+
+        a_wins_arr[i] = b["a_wins"]
+        totals_arr[i] = b["total"]
+
+    return BattleArrays(
+        event_idx=event_idx,
+        mode_idx=mode_idx,
+        team_a_chars=team_a_chars,
+        team_a_meta=team_a_meta,
+        team_b_chars=team_b_chars,
+        team_b_meta=team_b_meta,
+        a_wins=a_wins_arr,
+        totals=totals_arr,
+    )
+
+
+def train_val_split(
+    arrays: BattleArrays,
+    val_frac: float = 0.1,
+    seed: int = 42,
+) -> tuple[BattleArrays, BattleArrays]:
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(arrays))
+    n_val = int(len(arrays) * val_frac)
+    val_idx, train_idx = perm[:n_val], perm[n_val:]
+
+    def _slice(idx: np.ndarray) -> BattleArrays:
+        return BattleArrays(
+            event_idx=arrays.event_idx[idx],
+            mode_idx=arrays.mode_idx[idx],
+            team_a_chars=arrays.team_a_chars[idx],
+            team_a_meta=arrays.team_a_meta[idx],
+            team_b_chars=arrays.team_b_chars[idx],
+            team_b_meta=arrays.team_b_meta[idx],
+            a_wins=arrays.a_wins[idx],
+            totals=arrays.totals[idx],
+        )
+
+    return _slice(train_idx), _slice(val_idx)
