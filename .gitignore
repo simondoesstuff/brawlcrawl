@@ -11,3 +11,4 @@ __pycache__
 /data/*
 !/data/brawler_destruction.json
 !/data/brawler_effective_range.json
+!/data/crawl_leg1_20260827.json

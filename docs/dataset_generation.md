@@ -1,3 +1,7 @@
+# Dataset Notes
+
+- `crawl_leg1_20260827.json` legendary 1+ battles collected between 2026/07/25 and 2026/08/27
+
 # Dataset Generation
 
 The scraper builds a training dataset by BFS-crawling player battlelogs. Each step queries a frontier of player tags, extracts soloRanked battles, and discovers new tags from the players encountered.
@@ -29,12 +33,12 @@ with BrawlStarsClient() as client:
 
 ## Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `frontier_cap` | 200 | Max tags queried per step. Uncapped tags stay in the frontier for the next step. |
-| `min_trophies` | 0 | Only count battles where ≥5 players have at least this many trophies. Tags below this threshold are also excluded from discovery. For soloRanked, this field holds rank number — rank 16 (legendary 1) ≈ `min_trophies=16`. |
-| `since` | None | Drop battles older than this datetime. |
-| `request_interval` | 0.0 | Seconds to sleep before each API call. Use ≥0.5 to avoid rate limiting. |
+| Parameter          | Default | Description                                                                                                                                                                                                                 |
+| ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frontier_cap`     | 200     | Max tags queried per step. Uncapped tags stay in the frontier for the next step.                                                                                                                                            |
+| `min_trophies`     | 0       | Only count battles where ≥5 players have at least this many trophies. Tags below this threshold are also excluded from discovery. For soloRanked, this field holds rank number — rank 16 (legendary 1) ≈ `min_trophies=16`. |
+| `since`            | None    | Drop battles older than this datetime.                                                                                                                                                                                      |
+| `request_interval` | 0.0     | Seconds to sleep before each API call. Use ≥0.5 to avoid rate limiting.                                                                                                                                                     |
 
 ## Dataset structure
 
