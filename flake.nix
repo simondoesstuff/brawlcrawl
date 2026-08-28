@@ -24,6 +24,7 @@
           packages = with pkgs; [
             uv
             just
+            jq
             stable.snakemake
           ];
         };

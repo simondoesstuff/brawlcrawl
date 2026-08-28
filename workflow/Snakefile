@@ -18,6 +18,66 @@ rule brawler_names:
 		"jq '[.items[] | {{name: .name, id: .id}}]' {input} > {output}"
 
 
+rule brawler_classes:
+	input:
+		"data/brawler_names.json"
+	output:
+		"data/brawler_class.json"
+	run:
+		import json, re, time, urllib.parse, urllib.request
+
+		wiki_title_overrides = {"8-BIT": "8-Bit", "R-T": "R-T"}
+
+		def parse_field(wikitext, field):
+			m = re.search(rf"\|{field}\s*=\s*([^|}}'\n]+)", wikitext)
+			return m.group(1).strip() if m else None
+
+		def max_range(raw):
+			if raw is None:
+				return None
+			nums = re.findall(r"\d+(?:\.\d+)?", raw)
+			return max(float(n) for n in nums) if nums else None
+
+		brawlers = json.load(open(input[0]))
+		results = []
+
+		for brawler in brawlers:
+			name = brawler["name"]
+			title = wiki_title_overrides.get(name) or " ".join(w.capitalize() for w in name.split())
+			encoded = urllib.parse.quote(title)
+			url = (
+				f"https://brawlstars.fandom.com/api.php"
+				f"?action=parse&page={encoded}&format=json&prop=wikitext"
+			)
+			req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+			with urllib.request.urlopen(req) as resp:
+				data = json.load(resp)
+			wikitext = data.get("parse", {}).get("wikitext", {}).get("*", "")
+
+			brawler_class = parse_field(wikitext, "Class")
+			if brawler_class is None:
+				print(f"WARNING: no class found for {name!r} (wiki title: {title!r})", flush=True)
+
+			attack_range = max_range(parse_field(wikitext, "AttackRange"))
+			super_range = max_range(parse_field(wikitext, "SuperRange"))
+			if attack_range is None:
+				print(f"WARNING: no attack range for {name!r}", flush=True)
+			if super_range is None:
+				print(f"WARNING: no super range for {name!r}", flush=True)
+
+			results.append({
+				"id": brawler["id"],
+				"name": name,
+				"class": brawler_class,
+				"max_attack_range": attack_range,
+				"max_super_range": super_range,
+			})
+			time.sleep(0.5)
+
+		with open(output[0], "w") as f:
+			json.dump(results, f, indent=2)
+
+
 rule battlelog:
 	output:
 		"data/battles_{tag}.json"
