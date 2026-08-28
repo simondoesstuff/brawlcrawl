@@ -37,6 +37,7 @@ class _RawPlayer(_RawPlayerRequired, total=False):
 class _RawEvent(TypedDict, total=False):
     id: int
     mode: str
+    modeId: int
     map: str
 
 
@@ -84,6 +85,7 @@ class Event:
     id: int
     mode: str
     map: str
+    mode_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -132,6 +134,7 @@ def _parse_battle(raw: _RawBattleItem) -> Battle:
         id=event_raw.get("id") or 0,
         mode=event_raw.get("mode") or "",
         map=event_raw.get("map") or "",
+        mode_id=event_raw.get("modeId") or 0,
     )
     battle = raw["battle"]
     teams_raw = battle.get("teams")

@@ -204,6 +204,51 @@ def dataset_audit(
         console.print(ev_table)
 
 
+@app.command()
+def events_crawl(
+    dataset: Annotated[Path, typer.Argument(help="Path to dataset JSON")],
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Path to write events JSON")
+    ] = None,
+    request_interval: Annotated[
+        float, typer.Option(help="Seconds between API requests")
+    ] = 0.5,
+    tag_cap: Annotated[
+        int | None, typer.Option(help="Max number of player tags to query")
+    ] = None,
+) -> None:
+    """Crawl event details (mode, modeId, map) for all event IDs in the dataset."""
+    from crawl.api import BrawlStarsClient, Event
+    from crawl.dataset import Dataset
+    from crawl.events import crawl_events, load_events, save_events
+
+    save_path = output or Path("data/events.json")
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    db = Dataset.load(dataset)
+    all_event_ids = {comp.event_id for comp in db.stats} - {0}
+
+    events: dict[int, Event] = load_events(save_path) if save_path.exists() else {}
+
+    needed = all_event_ids - set(events)
+    if not needed:
+        print(f"All {len(all_event_ids)} event IDs already known. Nothing to do.")
+        return
+
+    print(f"Discovering {len(needed)} event IDs ({len(events)} already known).")
+    tags = sorted(db.seen_tags - db.bad_tags)
+
+    with BrawlStarsClient() as client:
+        for event in crawl_events(client, tags, needed, request_interval=request_interval, tag_cap=tag_cap):
+            events[event.id] = event
+            save_events(events, save_path)
+
+    missing = needed - set(events)
+    print(f"Found {len(needed) - len(missing)}/{len(needed)} event IDs. Saved to {save_path}.")
+    if missing:
+        print(f"Could not find {len(missing)} event IDs: {sorted(missing)}")
+
+
 def main() -> None:
     app()
 
