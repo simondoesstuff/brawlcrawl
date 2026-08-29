@@ -58,6 +58,10 @@ rule brawler_classes:
 			if brawler_class is None:
 				print(f"WARNING: no class found for {name!r} (wiki title: {title!r})", flush=True)
 
+			rarity = parse_field(wikitext, "Rarity")
+			if rarity is None:
+				print(f"WARNING: no rarity found for {name!r}", flush=True)
+
 			attack_range = max_range(parse_field(wikitext, "AttackRange"))
 			super_range = max_range(parse_field(wikitext, "SuperRange"))
 			if attack_range is None:
@@ -69,6 +73,7 @@ rule brawler_classes:
 				"id": brawler["id"],
 				"name": name,
 				"class": brawler_class,
+				"rarity": rarity,
 				"max_attack_range": attack_range,
 				"max_super_range": super_range,
 			})
