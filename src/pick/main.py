@@ -17,17 +17,18 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-from pick.constants import ANN_BRAIN, ANN_X, ANNOTATION_SLOT, PICKRATE_HIGH_Z, PICKRATE_LOW_Z, WIN_PROB_THRESHOLD
+from pick.constants import ANN_BRAIN, ANN_SECRET, ANN_X, ANNOTATION_SLOT, PICKRATE_HIGH_Z, PICKRATE_LOW_Z, WIN_PROB_THRESHOLD
 from pick.display import (
-    CLASS_COLORS,
-    CLASS_PT_STYLES,
+    RARITY_COLORS,
+    RARITY_PT_STYLES,
     _COL_GAP,
     _COL_WIDTH,
     _MAX_NAME_LEN,
     _RANK_WIDTH,
     _SCORE_WIDTH,
+    render_annotation_legend,
     render_brawler_table,
-    render_class_legend,
+    render_rarity_legend,
 )
 from pick.fuzzy import _normalize, _subseq_match, fuzzy_find
 from pick.score import BrawlerInfo, DraftContext, EventInfo, load_context, score_map, score_sixth_pick
@@ -86,7 +87,7 @@ def _brawler_completer(ctx: DraftContext, excluded: set[int]) -> _FuzzyCompleter
     return _FuzzyCompleter(
         candidates=[b.name for b in available],
         meta={b.name: b.brawler_class for b in available},
-        style={b.name: CLASS_PT_STYLES[b.brawler_class] for b in available},
+        style={b.name: RARITY_PT_STYLES.get(b.rarity, "bold") for b in available},
     )
 
 
@@ -140,12 +141,35 @@ def sixth_pick_annotations(
     return result
 
 
+def overview_annotations(
+    ctx: DraftContext,
+    event: EventInfo,
+    map_scores: list[tuple[BrawlerInfo, float]],
+) -> dict[int, str]:
+    """Return per-brawler-id annotation for the overview table.
+
+    Secret icon: good map score (≥0), below-average pickrate (hidden gem).
+    X icon:      poor map score (<0), high pickrate (overrated by players).
+    """
+    result: dict[int, str] = {}
+    for brawler, win_score in map_scores:
+        pz = ctx.pickrates.get(brawler.id, {}).get(event.id)
+        if pz is None:
+            continue
+        if win_score >= 0 and pz < PICKRATE_LOW_Z:
+            result[brawler.id] = ANN_SECRET
+        elif win_score < 0 and pz >= PICKRATE_HIGH_Z:
+            result[brawler.id] = ANN_X
+    return result
+
+
 # ── team assembly Application ─────────────────────────────────────────────────
 
 def _run_team_assembly(
     ctx: DraftContext,
     event: EventInfo,
     map_scores: list[tuple[BrawlerInfo, float]],
+    ann: dict[int, str] | None = None,
 ) -> tuple[list[BrawlerInfo], list[BrawlerInfo]] | None:
     """Interactive team assembly with live grid highlights.
 
@@ -154,6 +178,7 @@ def _run_team_assembly(
     submitted: list[tuple[str, BrawlerInfo]] = []  # (role, brawler)
     cancelled = [False]
     error_msg = [""]
+    _ann = ann or {}
 
     def _excluded() -> set[int]:
         return {b.id for _, b in submitted}
@@ -185,9 +210,11 @@ def _run_team_assembly(
 
         submitted_roles: dict[int, str] = {b.id: role for role, b in submitted}
 
-        n_cols = max(1, (term_w + _COL_GAP) // (_COL_WIDTH + _COL_GAP))
-        n_items = len(map_scores)
-        n_rows = ceil(n_items / n_cols)
+        col_w = _COL_WIDTH + ANNOTATION_SLOT
+        n_cols = max(1, (term_w + _COL_GAP) // (col_w + _COL_GAP))
+
+        above = [(b, s) for b, s in map_scores if s >= 0]
+        below = [(b, s) for b, s in map_scores if s < 0]
 
         result: list[tuple[str, str]] = []
 
@@ -201,44 +228,57 @@ def _run_team_assembly(
             ("fg:ansibrightblack", f"  {event.mode}{phase_label}\n\n"),
         ]
 
-        for row in range(n_rows):
-            for col in range(n_cols):
-                idx = row + col * n_rows
-                if idx >= n_items:
-                    # Pad empty cell
-                    pad = _COL_WIDTH + (2 if col < n_cols - 1 else 0)
-                    result.append(("", " " * pad))
-                    continue
+        def _render_section(section: list[tuple[BrawlerInfo, float]], rank_offset: int) -> None:
+            n = len(section)
+            if not n:
+                return
+            n_rows = ceil(n / n_cols)
+            for row in range(n_rows):
+                for col in range(n_cols):
+                    idx = row + col * n_rows
+                    if idx >= n:
+                        pad = col_w + (2 if col < n_cols - 1 else 0)
+                        result.append(("", " " * pad))
+                        continue
 
-                brawler, score = map_scores[idx]
-                score_str = f"{score:+.2f}"
-                cls_style = CLASS_PT_STYLES.get(brawler.brawler_class, "")
+                    brawler, score = section[idx]
+                    score_str = f"{score:+.2f}"
+                    rar_style = RARITY_PT_STYLES.get(brawler.rarity, "")
 
-                rank_sep = "."
-                if brawler.id in submitted_roles:
-                    role = submitted_roles[brawler.id]
-                    bg = "bg:#2a0000" if role == "enemy" else "bg:#002a00"
-                    rank_s = f"fg:ansibrightblack {bg}"
-                    name_s = f"{cls_style} {bg}"
-                    score_s = bg
-                elif brawler.id == best_match_id:
-                    rank_sep = "▸"
-                    rank_s = "fg:ansibrightblack bold bg:#1e1e00"
-                    name_s = f"{cls_style} bold bg:#1e1e00"
-                    score_s = "bold bg:#1e1e00"
-                else:
-                    rank_s = "fg:ansibrightblack"
-                    name_s = cls_style
-                    score_s = ""
+                    rank_sep = "."
+                    if brawler.id in submitted_roles:
+                        role = submitted_roles[brawler.id]
+                        bg = "bg:#2a0000" if role == "enemy" else "bg:#002a00"
+                        rank_s = f"fg:ansibrightblack {bg}"
+                        name_s = f"{rar_style} {bg}"
+                        ann_s  = f"fg:ansibrightblack {bg}"
+                        score_s = bg
+                    elif brawler.id == best_match_id:
+                        rank_sep = "▸"
+                        rank_s = "fg:ansibrightblack bold bg:#1e1e00"
+                        name_s = f"{rar_style} bold bg:#1e1e00"
+                        ann_s  = "fg:ansibrightblack bold bg:#1e1e00"
+                        score_s = "bold bg:#1e1e00"
+                    else:
+                        rank_s = "fg:ansibrightblack"
+                        name_s = rar_style
+                        ann_s  = "fg:ansibrightblack"
+                        score_s = ""
 
-                result.append((rank_s, f"{idx + 1:>{_RANK_WIDTH}}{rank_sep} "))
-                result.append((name_s, f"{brawler.name:<{_MAX_NAME_LEN}}"))
-                result.append((score_s, f" {score_str:>{_SCORE_WIDTH - 1}}"))
+                    result.append((rank_s, f"{rank_offset + idx + 1:>{_RANK_WIDTH}}{rank_sep} "))
+                    result.append((name_s, f"{brawler.name:<{_MAX_NAME_LEN}}"))
+                    result.append((ann_s, _ann.get(brawler.id, " " * ANNOTATION_SLOT)))
+                    result.append((score_s, f"{score_str:>{_SCORE_WIDTH}}"))
 
-                if col < n_cols - 1:
-                    result.append(("", "  "))
+                    if col < n_cols - 1:
+                        result.append(("", "  "))
 
-            result.append(("", "\n"))
+                result.append(("", "\n"))
+
+        _render_section(above, 0)
+        if above and below:
+            result.append(("fg:ansiwhite", "─" * term_w + "\n"))
+        _render_section(below, len(above))
 
         # Submitted summary
         if submitted:
@@ -246,10 +286,10 @@ def _run_team_assembly(
             for role, b in submitted:
                 role_label = "Enemy" if role == "enemy" else "Ally "
                 bg = "bg:#2a0000" if role == "enemy" else "bg:#002a00"
-                cls_s = CLASS_PT_STYLES.get(b.brawler_class, "")
+                rar_s = RARITY_PT_STYLES.get(b.rarity, "")
                 result += [
                     ("fg:ansibrightblack", f"  {role_label}  "),
-                    (f"{cls_s} {bg}", f"{b.name:<{_MAX_NAME_LEN}}"),
+                    (f"{rar_s} {bg}", f"{b.name:<{_MAX_NAME_LEN}}"),
                     ("fg:ansibrightblack", f"  {b.brawler_class}\n"),
                 ]
 
@@ -368,7 +408,8 @@ def main(
         f"[bold]{len(ctx.events)}[/bold] maps. "
         f"[dim]Ctrl-C to quit.[/dim]\n"
     )
-    render_class_legend(console)
+    render_rarity_legend(console)
+    render_annotation_legend(console)
 
     session: PromptSession = PromptSession(style=_DARK_STYLE)
     last_event: EventInfo | None = None
@@ -397,9 +438,10 @@ def main(
             last_event = event
 
             map_scores = score_map(ctx, event)
+            ov_ann = overview_annotations(ctx, event, map_scores)
 
             # ── Team assembly (with live grid) ─────────────────────────────
-            result = _run_team_assembly(ctx, event, map_scores)
+            result = _run_team_assembly(ctx, event, map_scores, ann=ov_ann)
             if result is None:
                 console.print("  [dim](cancelled)[/dim]\n")
                 continue
@@ -407,7 +449,7 @@ def main(
 
             # ── 6th pick ───────────────────────────────────────────────────
             def _colored(b: BrawlerInfo) -> str:
-                c = CLASS_COLORS[b.brawler_class]
+                c = RARITY_COLORS.get(b.rarity, "white")
                 return f"[bold {c}]{b.name}[/bold {c}]"
 
             console.print(

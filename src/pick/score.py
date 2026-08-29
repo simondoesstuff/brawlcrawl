@@ -18,6 +18,7 @@ class BrawlerInfo:
     id: int
     name: str
     brawler_class: str
+    rarity: str
     char_idx: int
     meta: tuple[int, int, int]  # (class_idx, range_idx, destruct_idx)
 
@@ -64,6 +65,7 @@ def load_context(
                 id=bid,
                 name=b["name"],
                 brawler_class=b["class"],
+                rarity=b["rarity"],
                 char_idx=vocabs.char_to_idx[bid],
                 meta=char_meta_lookup[bid],
             ))

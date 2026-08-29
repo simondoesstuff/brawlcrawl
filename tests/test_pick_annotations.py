@@ -15,7 +15,7 @@ from pick.score import BrawlerInfo, DraftContext, EventInfo
 # ── minimal stubs ─────────────────────────────────────────────────────────────
 
 def _brawler(bid: int, name: str = "COLT") -> BrawlerInfo:
-    return BrawlerInfo(id=bid, name=name, brawler_class="Damage Dealer", char_idx=bid, meta=(0, 0, 0))
+    return BrawlerInfo(id=bid, name=name, brawler_class="Damage Dealer", rarity="Rare", char_idx=bid, meta=(0, 0, 0))
 
 
 def _event(eid: int = 15000005) -> EventInfo:
@@ -94,7 +94,7 @@ def test_mixed_annotations():
     b4 = _brawler(4, "BO")      # no pickrate data → no annotation
     e = _event(15000005)
     ctx = _ctx({
-        1: {15000005: -0.5},   # low pickrate
+        1: {15000005: PICKRATE_LOW_Z - 0.1},   # low pickrate
         2: {15000005: 1.5},    # high pickrate
         3: {15000005: 1.5},    # high pickrate
     })
