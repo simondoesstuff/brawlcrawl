@@ -7,10 +7,13 @@
 ## Layout
 
 - `workflow/` — Snakemake pipeline; fetches raw JSON from the Brawl Stars API (`$BSTOK`) into `data/`
-- `src/brawl/api.py` — REST client; the only place that touches HTTP or JSON; returns typed dataclasses
-- `src/brawl/battles.py` — composable filters and converters over battle lists
-- `src/brawl/dataset.py` — `Dataset` state (seen tags, frontier, stats, battle hash store); serializes to JSON
-- `src/brawl/scraper.py` — pure `consume()` function; `Scraper` drives iterative BFS extension steps
+- `src/crawl/` — REST client, battle log scraper; fetches and aggregates battle data
+- `src/geneus/` — ML model and training loop (`BrawlModel`, `train` CLI)
+- `src/pick/` — interactive draft-assist REPL (`pick` CLI); ranks map picks and scores 6th picks
+  - `fuzzy.py` — subsequence fuzzy match with shortest-name tiebreak (see `docs/misc_notes.md`)
+  - `score.py` — checkpoint loading, per-brawler z-score ranking, 6th-pick win probability
+  - `display.py` — columnar terminal grid with class-colored brawler names
+  - `main.py` — interactive loop: map → rankings → picks → 6th-pick candidates → repeat
 - `tests/` — unit tests (no network); `tests/integration/` — API client tests using mocked HTTP
 - `docs/dataset_generation.md` — usage guide for the dataset scraper
 

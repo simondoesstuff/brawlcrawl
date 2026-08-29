@@ -17,6 +17,7 @@ dependencies = [
   "numpy>=2.5.2",
   "optax>=0.2.8",
   "plotext>=6.0.0",
+  "prompt-toolkit>=3.0.53",
   "pytest>=9.1.1",
   "rich>=15.0.0",
   "scikit-learn>=1.9.0",
@@ -31,13 +32,14 @@ dependencies = [
 [project.scripts]
 crawl = "crawl.main:main"
 geneus = "geneus.train:main"
+pick = "pick.main:entrypoint"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = ["crawl", "geneus"]
+module-name = ["crawl", "geneus", "pick"]
 
 [tool.uv.sources]
 jpc = { git = "https://github.com/simondoesstuff/jpc" }
