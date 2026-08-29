@@ -1,8 +1,11 @@
 _default:
 	@just --list
 
-run *args="--help":
+crawl *args="--help":
 	uv run crawl {{args}}
+
+pick *args="":
+	uv run pick {{args}}
 
 typecheck path='src':
 	uv run basedpyright {{path}}
