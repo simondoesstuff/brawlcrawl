@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 from geneus.model import BrawlModel, MLP, Swish
+from geneus.train import winrate_loss
+from geneus.data import WinrateArrays
 
 VOCAB = dict(
     n_events=31,
@@ -131,6 +133,42 @@ class TestBrawlModel:
         logit_k1 = model(*sample_inputs, key=jax.random.PRNGKey(1))
         logit_k2 = model(*sample_inputs, key=jax.random.PRNGKey(2))
         assert not jnp.array_equal(logit_k1, logit_k2)
+
+    def test_predict_winrate_scalar(self, model: BrawlModel) -> None:
+        logit = model.predict_winrate(
+            jnp.array(0), jnp.array(0), jnp.array(0), jnp.array([0, 0, 0])
+        )
+        assert logit.shape == ()
+
+    def test_predict_winrate_with_key(self, model: BrawlModel) -> None:
+        logit = model.predict_winrate(
+            jnp.array(0), jnp.array(0), jnp.array(0), jnp.array([0, 0, 0]),
+            key=jax.random.PRNGKey(0),
+        )
+        assert logit.shape == ()
+
+    def test_predict_winrate_vmap(self, model: BrawlModel) -> None:
+        B = 4
+        logits = jax.vmap(model.predict_winrate)(
+            jnp.zeros(B, dtype=jnp.int32),
+            jnp.zeros(B, dtype=jnp.int32),
+            jnp.zeros(B, dtype=jnp.int32),
+            jnp.zeros((B, 3), dtype=jnp.int32),
+        )
+        assert logits.shape == (B,)
+
+    def test_winrate_loss_runs(self, model: BrawlModel) -> None:
+        B = 4
+        batch = WinrateArrays(
+            event_idx=jnp.zeros(B, dtype=jnp.int32),
+            mode_idx=jnp.zeros(B, dtype=jnp.int32),
+            char_idx=jnp.zeros(B, dtype=jnp.int32),
+            char_meta=jnp.zeros((B, 3), dtype=jnp.int32),
+            z_scores=jnp.zeros(B, dtype=jnp.float32),
+        )
+        loss = winrate_loss(model, batch)
+        assert loss.shape == ()
+        assert jnp.isfinite(loss)
 
     def test_vmap_with_keys(self, model: BrawlModel) -> None:
         B = 4

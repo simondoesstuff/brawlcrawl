@@ -83,6 +83,7 @@ class BrawlModel(eqx.Module):
     mlp_char_inner: MLP
     mlp_char_ctx: MLP
     mlp_team: MLP
+    mlp_winrate: MLP
 
     def __init__(
         self,
@@ -98,7 +99,7 @@ class BrawlModel(eqx.Module):
         *,
         key: Array,
     ) -> None:
-        k = jax.random.split(key, 9)
+        k = jax.random.split(key, 10)
         self.embed_map_id = eqx.nn.Embedding(n_events, embed_dim, key=k[0])
         self.embed_map_mode = eqx.nn.Embedding(n_modes, embed_dim, key=k[1])
         self.embed_char = eqx.nn.Embedding(n_chars, embed_dim, key=k[2])
@@ -109,6 +110,7 @@ class BrawlModel(eqx.Module):
         self.mlp_char_inner = MLP(embed_dim * 2, hidden_dim, hidden_dim, depth=1, dropout_p=dropout_p, key=k[6])
         self.mlp_char_ctx = MLP(embed_dim + hidden_dim, hidden_dim, hidden_dim, depth=1, dropout_p=dropout_p, key=k[7])
         self.mlp_team = MLP(hidden_dim * 4 + embed_dim, hidden_dim, 1, depth=1, dropout_p=dropout_p, key=k[8])
+        self.mlp_winrate = MLP(hidden_dim, hidden_dim, 1, depth=1, dropout_p=dropout_p, key=k[9])
 
     def _encode_char(
         self,
@@ -182,3 +184,21 @@ class BrawlModel(eqx.Module):
             t_a = self._encode_team(team_a_chars, team_a_meta, map_emb)
             t_b = self._encode_team(team_b_chars, team_b_meta, map_emb)
             return self._score(t_a, t_b, map_emb) - self._score(t_b, t_a, map_emb)
+
+    def predict_winrate(
+        self,
+        event_idx: Int[Array, ""],
+        mode_idx: Int[Array, ""],
+        char_idx: Int[Array, ""],
+        char_meta: Int[Array, "3"],
+        *,
+        key: Array | None = None,
+    ) -> Float[Array, ""]:
+        """Predict the win probability for a single character on a given map."""
+        map_emb = self.embed_map_id(event_idx) + self.embed_map_mode(mode_idx)
+        if key is not None:
+            k_char, k_wr = jax.random.split(key)
+        else:
+            k_char = k_wr = None
+        char_emb = self._encode_char(char_idx, char_meta, map_emb, key=k_char)
+        return self.mlp_winrate(char_emb, key=k_wr).squeeze()

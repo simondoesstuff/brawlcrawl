@@ -78,6 +78,54 @@ rule brawler_classes:
 			json.dump(results, f, indent=2)
 
 
+rule winrates:
+	input:
+		"data/crawl_{leg}.json"
+	output:
+		"data/winrates_{leg}.json"
+	run:
+		import json
+		from collections import defaultdict
+
+		raw = json.load(open(input[0]))
+		# counts[(char_id, event_id)] -> [wins, total]
+		counts: dict = defaultdict(lambda: [0, 0])
+
+		for entry in raw["stats"]:
+			event_id = entry["event_id"]
+			a_wins = entry["a_wins"]
+			total = entry["total"]
+			for char_id in entry["team_a"]:
+				counts[(char_id, event_id)][0] += a_wins
+				counts[(char_id, event_id)][1] += total
+			for char_id in entry["team_b"]:
+				counts[(char_id, event_id)][0] += total - a_wins
+				counts[(char_id, event_id)][1] += total
+
+		# Raw win rate per (char, event)
+		wr = {k: v[0] / v[1] for k, v in counts.items()}
+
+		# Z-score normalize within each event so the target is relative advantage
+		event_rates: dict = defaultdict(list)
+		for (char_id, event_id), rate in wr.items():
+			event_rates[event_id].append(rate)
+
+		event_stats: dict = {}
+		for event_id, rates in event_rates.items():
+			mu = sum(rates) / len(rates)
+			sigma = (sum((r - mu) ** 2 for r in rates) / len(rates)) ** 0.5
+			event_stats[event_id] = (mu, sigma)
+
+		results = []
+		for (char_id, event_id), rate in sorted(wr.items()):
+			mu, sigma = event_stats[event_id]
+			z = (rate - mu) / sigma if sigma > 0 else 0.0
+			results.append({"char_id": char_id, "event_id": event_id, "z_score": z})
+
+		with open(output[0], "w") as f:
+			json.dump(results, f, indent=2)
+
+
 rule battlelog:
 	output:
 		"data/battles_{tag}.json"

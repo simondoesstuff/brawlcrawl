@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geneus.data import BattleArrays, Vocabs, load_battles, load_vocabs, train_val_split
+from geneus.data import BattleArrays, Vocabs, WinrateArrays, load_battles, load_vocabs, load_winrates, train_val_split
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -84,6 +84,47 @@ class TestBattleLoading:
             battles.a_wins, battles.totals,
         ]:
             assert arr.dtype == np.int32
+
+
+@pytest.fixture(scope="module")
+def winrates(vocabs: Vocabs) -> WinrateArrays:
+    return load_winrates(DATA_DIR, vocabs=vocabs)
+
+
+class TestWinrateLoading:
+    def test_winrates_loaded(self, winrates: WinrateArrays) -> None:
+        assert len(winrates) > 0
+
+    def test_event_indices_in_range(self, winrates: WinrateArrays, vocabs: Vocabs) -> None:
+        assert winrates.event_idx.min() >= 0
+        assert winrates.event_idx.max() < vocabs.n_events
+
+    def test_char_indices_in_range(self, winrates: WinrateArrays, vocabs: Vocabs) -> None:
+        assert winrates.char_idx.min() >= 0
+        assert winrates.char_idx.max() < vocabs.n_chars
+
+    def test_meta_indices_in_range(self, winrates: WinrateArrays, vocabs: Vocabs) -> None:
+        assert winrates.char_meta[:, 0].max() < vocabs.n_classes
+        assert winrates.char_meta[:, 1].max() < vocabs.n_ranges
+        assert winrates.char_meta[:, 2].max() < vocabs.n_destructs
+
+    def test_z_scores_finite(self, winrates: WinrateArrays) -> None:
+        assert np.isfinite(winrates.z_scores).all()
+
+    def test_z_scores_near_zero_mean_per_event(self, winrates: WinrateArrays) -> None:
+        for event_val in np.unique(winrates.event_idx):
+            mask = winrates.event_idx == event_val
+            assert abs(winrates.z_scores[mask].mean()) < 1e-4
+
+    def test_index_dtypes(self, winrates: WinrateArrays) -> None:
+        for arr in [winrates.event_idx, winrates.mode_idx, winrates.char_idx, winrates.char_meta]:
+            assert arr.dtype == np.int32
+
+    def test_z_score_dtype(self, winrates: WinrateArrays) -> None:
+        assert winrates.z_scores.dtype == np.float32
+
+    def test_char_meta_shape(self, winrates: WinrateArrays) -> None:
+        assert winrates.char_meta.shape == (len(winrates), 3)
 
 
 class TestTrainValSplit:

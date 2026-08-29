@@ -13,7 +13,7 @@ import plotext as plt
 import typer
 from tqdm import tqdm
 
-from geneus.data import BattleArrays, load_battles, load_vocabs, train_val_split
+from geneus.data import BattleArrays, WinrateArrays, load_battles, load_vocabs, load_winrates, train_val_split
 from geneus.model import BrawlModel
 
 app = typer.Typer(add_completion=False)
@@ -31,6 +31,16 @@ def _to_jax(batch: BattleArrays) -> BattleArrays:
         team_b_meta=jnp.asarray(batch.team_b_meta),
         a_wins=jnp.asarray(batch.a_wins),
         totals=jnp.asarray(batch.totals),
+    )
+
+
+def _to_jax_winrates(w: WinrateArrays) -> WinrateArrays:
+    return WinrateArrays(
+        event_idx=jnp.asarray(w.event_idx),
+        mode_idx=jnp.asarray(w.mode_idx),
+        char_idx=jnp.asarray(w.char_idx),
+        char_meta=jnp.asarray(w.char_meta),
+        z_scores=jnp.asarray(w.z_scores),
     )
 
 
@@ -68,6 +78,24 @@ def bce_loss(
     return (bce * totals).sum() / totals.sum()
 
 
+def winrate_loss(
+    model: BrawlModel,
+    batch: WinrateArrays,
+    key: jax.Array | None = None,
+) -> jax.Array:
+    """MSE between predicted and z-score-normalized per-(character, map) win rates."""
+    if key is not None:
+        batch_keys = jax.random.split(key, batch.event_idx.shape[0])
+        preds = jax.vmap(
+            lambda ev, mo, ch, cm, k: model.predict_winrate(ev, mo, ch, cm, key=k)
+        )(batch.event_idx, batch.mode_idx, batch.char_idx, batch.char_meta, batch_keys)
+    else:
+        preds = jax.vmap(model.predict_winrate)(
+            batch.event_idx, batch.mode_idx, batch.char_idx, batch.char_meta
+        )
+    return jnp.mean((preds - batch.z_scores) ** 2)
+
+
 def accuracy(model: BrawlModel, batch: BattleArrays) -> jax.Array:
     logits = jax.vmap(model)(
         batch.event_idx,
@@ -81,17 +109,25 @@ def accuracy(model: BrawlModel, batch: BattleArrays) -> jax.Array:
     return ((logits > 0) == (p > 0.5)).mean()
 
 
-def make_step_fn(optimizer: optax.GradientTransformation):
-    """Return a jit-compiled training step that closes over the optimizer."""
+def make_step_fn(
+    optimizer: optax.GradientTransformation,
+    winrate_weight: float = 0.1,
+):
+    """Return a jit-compiled training step combining BCE and winrate auxiliary losses."""
 
     @eqx.filter_jit
     def step(
         model: BrawlModel,
         opt_state: optax.OptState,
-        batch: BattleArrays,
+        battle_batch: BattleArrays,
+        winrate_batch: WinrateArrays,
         key: jax.Array,
-    ) -> tuple[BrawlModel, optax.OptState, jax.Array]:
-        loss, grads = eqx.filter_value_and_grad(bce_loss)(model, batch, key)
+    ) -> tuple[BrawlModel, optax.OptState, jax.Array, jax.Array]:
+        def loss_fn(m: BrawlModel, k: jax.Array) -> jax.Array:
+            k1, k2 = jax.random.split(k)
+            return bce_loss(m, battle_batch, k1) + winrate_weight * winrate_loss(m, winrate_batch, k2)
+
+        loss, grads = eqx.filter_value_and_grad(loss_fn)(model, key)
         updates, new_state = optimizer.update(
             grads, opt_state, eqx.filter(model, eqx.is_array)
         )
@@ -102,22 +138,24 @@ def make_step_fn(optimizer: optax.GradientTransformation):
 
 def _iter_batches(
     arrays: BattleArrays,
+    winrates: WinrateArrays,
     batch_size: int,
     rng: np.random.Generator,
-) -> list[BattleArrays]:
+) -> list[tuple[BattleArrays, WinrateArrays]]:
     perm = rng.permutation(len(arrays))
     batches = []
     for start in range(0, len(arrays), batch_size):
         idx = perm[start : start + batch_size]
+        n = len(idx)
         # Randomly flip which team is "A" — exact since model is anti-symmetric.
-        flip = rng.integers(0, 2, size=len(idx)).astype(bool)
+        flip = rng.integers(0, 2, size=n).astype(bool)
         ta_c = arrays.team_a_chars[idx]
         ta_m = arrays.team_a_meta[idx]
         tb_c = arrays.team_b_chars[idx]
         tb_m = arrays.team_b_meta[idx]
         a_wins = arrays.a_wins[idx]
         totals = arrays.totals[idx]
-        batches.append(_to_jax(BattleArrays(
+        battle_batch = _to_jax(BattleArrays(
             event_idx=arrays.event_idx[idx],
             mode_idx=arrays.mode_idx[idx],
             team_a_chars=np.where(flip[:, None], tb_c, ta_c),
@@ -126,7 +164,17 @@ def _iter_batches(
             team_b_meta=np.where(flip[:, None, None], ta_m, tb_m),
             a_wins=np.where(flip, totals - a_wins, a_wins),
             totals=totals,
-        )))
+        ))
+        # Sample a winrate mini-batch with replacement (winrate data << steps × batch_size).
+        wr_idx = rng.integers(0, len(winrates.event_idx), size=n)
+        wr_batch = _to_jax_winrates(WinrateArrays(
+            event_idx=winrates.event_idx[wr_idx],
+            mode_idx=winrates.mode_idx[wr_idx],
+            char_idx=winrates.char_idx[wr_idx],
+            char_meta=winrates.char_meta[wr_idx],
+            z_scores=winrates.z_scores[wr_idx],
+        ))
+        batches.append((battle_batch, wr_batch))
     return batches
 
 
@@ -140,6 +188,7 @@ def _render_dashboard(
     train_losses: list[float],
     val_losses: list[float],
     val_accs: list[float],
+    winrate_losses: list[float],
 ) -> None:
     fig = plt.figure
     fig.clear()
@@ -147,12 +196,15 @@ def _render_dashboard(
 
     sp_loss = fig.subplot(1, 1)
     sp_loss.title("BCE Loss")
-    s_train = sp_loss.signal(epochs_x, train_losses, marker=_colored_marker("cyan"))
-    s_val   = sp_loss.signal(epochs_x, val_losses,   marker=_colored_marker("red"))
+    s_train = sp_loss.signal(epochs_x, train_losses,   marker=_colored_marker("cyan"))
+    s_val   = sp_loss.signal(epochs_x, val_losses,     marker=_colored_marker("red"))
+    s_wr    = sp_loss.signal(epochs_x, winrate_losses, marker=_colored_marker("yellow"))
     s_train.label("train")
     s_val.label("val")
+    s_wr.label("winrate")
     sp_loss.draw(s_train)
     sp_loss.draw(s_val)
+    sp_loss.draw(s_wr)
     sp_loss.legend()
     sp_loss.plot_size(55, 18)
 
@@ -176,10 +228,12 @@ def _save_curves(
     train_losses: list[float],
     val_losses: list[float],
     val_accs: list[float],
+    winrate_losses: list[float],
 ) -> None:
     fig, (ax1, ax2) = mplt.subplots(1, 2, figsize=(12, 4))
-    ax1.plot(epochs_x, train_losses, label="train", color="tab:blue")
-    ax1.plot(epochs_x, val_losses, label="val", color="tab:red")
+    ax1.plot(epochs_x, train_losses,   label="train",   color="tab:blue")
+    ax1.plot(epochs_x, val_losses,     label="val",     color="tab:red")
+    ax1.plot(epochs_x, winrate_losses, label="winrate", color="tab:orange")
     ax1.set_title("BCE Loss")
     ax1.set_xlabel("Epoch")
     ax1.legend()
@@ -204,6 +258,7 @@ def train(
     dropout_p: Annotated[float, typer.Option(help="Dropout probability (char + MLP)")] = 0.3,
     val_frac: Annotated[float, typer.Option(help="Validation fraction")] = 0.1,
     checkpoint_every: Annotated[int, typer.Option(help="Periodic checkpoint interval in epochs (0=off)")] = 5,
+    winrate_weight: Annotated[float, typer.Option(help="Weight of the per-char winrate auxiliary loss")] = 0.1,
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
     typer.echo("Loading data...")
@@ -211,10 +266,13 @@ def train(
     all_battles = load_battles(data_dir, vocabs=vocabs)
     train_data, val_data = train_val_split(all_battles, val_frac=val_frac, seed=seed)
     val_jax = _to_jax(val_data)
+    winrate_data = load_winrates(data_dir, vocabs=vocabs)
+    winrate_jax = _to_jax_winrates(winrate_data)
     typer.echo(
         f"  {len(train_data)} train / {len(val_data)} val compositions  "
         f"({int(train_data.totals.sum()):,} + {int(val_data.totals.sum()):,} battles)"
     )
+    typer.echo(f"  {len(winrate_data)} (char, map) winrate targets")
 
     key = jax.random.PRNGKey(seed)
     model = BrawlModel(
@@ -244,12 +302,13 @@ def train(
     )
     optimizer = optax.adamw(learning_rate=schedule, weight_decay=weight_decay)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
-    step = make_step_fn(optimizer)
+    step = make_step_fn(optimizer, winrate_weight=winrate_weight)
 
     ckpt_dir = out.parent / "checkpoints"
     if checkpoint_every > 0:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+    has_val = len(val_data) > 0
     rng = np.random.default_rng(seed)
     train_key = jax.random.PRNGKey(seed + 1)
     best_val_loss = float("inf")
@@ -259,25 +318,35 @@ def train(
     train_loss_hist: list[float] = []
     val_loss_hist: list[float] = []
     val_acc_hist: list[float] = []
+    winrate_loss_hist: list[float] = []
 
     for epoch in tqdm(range(1, epochs + 1), desc="Training", unit="epoch"):
-        batches = _iter_batches(train_data, batch_size, rng)
+        batches = _iter_batches(train_data, winrate_data, batch_size, rng)
         batch_losses: list[float] = []
-        for batch in batches:
+        for battle_batch, wr_batch in batches:
             train_key, step_key = jax.random.split(train_key)
-            model, opt_state, loss = step(model, opt_state, batch, step_key)
+            model, opt_state, loss = step(model, opt_state, battle_batch, wr_batch, step_key)
             batch_losses.append(float(loss))
 
-        val_loss = float(bce_loss(model, val_jax))
-        val_acc = float(accuracy(model, val_jax))
         mean_train = float(np.mean(batch_losses))
+        wr_loss = float(winrate_loss(model, winrate_jax))
         marker = ""
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if has_val:
+            val_loss = float(bce_loss(model, val_jax))
+            val_acc = float(accuracy(model, val_jax))
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                out.parent.mkdir(parents=True, exist_ok=True)
+                eqx.tree_serialise_leaves(out, model)
+                marker = " ✓"
+            log_suffix = f"  val={val_loss:.4f}  acc={val_acc:.3f}  wr={wr_loss:.4f}{marker}"
+        else:
+            val_loss = float("nan")
+            val_acc = float("nan")
             out.parent.mkdir(parents=True, exist_ok=True)
             eqx.tree_serialise_leaves(out, model)
-            marker = " ✓"
+            log_suffix = f"  wr={wr_loss:.4f}"
 
         if checkpoint_every > 0 and epoch % checkpoint_every == 0:
             ckpt_path = ckpt_dir / f"model_epoch_{epoch:04d}.eqx"
@@ -287,16 +356,17 @@ def train(
         train_loss_hist.append(mean_train)
         val_loss_hist.append(val_loss)
         val_acc_hist.append(val_acc)
-        epoch_lines.append(
-            f"Epoch {epoch:3d}  train={mean_train:.4f}"
-            f"  val={val_loss:.4f}  acc={val_acc:.3f}{marker}"
-        )
+        winrate_loss_hist.append(wr_loss)
+        epoch_lines.append(f"Epoch {epoch:3d}  train={mean_train:.4f}{log_suffix}")
 
-        _render_dashboard(epoch_lines, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist)
+        _render_dashboard(epoch_lines, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist, winrate_loss_hist)
 
     curves_path = out.parent / "train_curves.png"
-    _save_curves(curves_path, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist)
-    print(f"\nBest val loss: {best_val_loss:.4f}  → {out}")
+    _save_curves(curves_path, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist, winrate_loss_hist)
+    if has_val:
+        print(f"\nBest val loss: {best_val_loss:.4f}  → {out}")
+    else:
+        print(f"\nFinal train loss: {mean_train:.4f}  → {out}")
     print(f"Training curves  → {curves_path}")
 
 

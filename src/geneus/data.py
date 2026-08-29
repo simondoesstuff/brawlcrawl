@@ -9,6 +9,8 @@ import numpy as np
 
 _DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
+_WINRATES_FILE = "winrates_leg1_20260827.json"
+
 
 @dataclass(frozen=True)
 class Vocabs:
@@ -70,6 +72,34 @@ jax.tree_util.register_pytree_node(
         None,
     ),
     lambda _, xs: BattleArrays(*xs),
+)
+
+
+@dataclass
+class WinrateArrays:
+    """Per-(character, event) z-scored win rates for the auxiliary objective.
+
+    z_scores are normalized within each event: z = (wr - μ_event) / σ_event,
+    capturing relative character advantage on a map rather than absolute win rate.
+    """
+
+    event_idx: np.ndarray  # [M] int32
+    mode_idx: np.ndarray   # [M] int32
+    char_idx: np.ndarray   # [M] int32
+    char_meta: np.ndarray  # [M, 3] int32 — (class_idx, range_idx, destruct_idx)
+    z_scores: np.ndarray   # [M] float32
+
+    def __len__(self) -> int:
+        return len(self.event_idx)
+
+
+jax.tree_util.register_pytree_node(
+    WinrateArrays,
+    lambda w: (
+        [w.event_idx, w.mode_idx, w.char_idx, w.char_meta, w.z_scores],
+        None,
+    ),
+    lambda _, xs: WinrateArrays(*xs),
 )
 
 
@@ -181,6 +211,51 @@ def load_battles(
         team_b_meta=team_b_meta,
         a_wins=a_wins_arr,
         totals=totals_arr,
+    )
+
+
+def load_winrates(
+    data_dir: Path = _DATA_DIR,
+    *,
+    vocabs: Vocabs | None = None,
+    winrates_file: str = _WINRATES_FILE,
+) -> WinrateArrays:
+    if vocabs is None:
+        vocabs = load_vocabs(data_dir)
+
+    char_meta = _build_char_meta_lookup(data_dir, vocabs)
+
+    events: list[dict] = json.loads((data_dir / "events.json").read_text())
+    event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
+
+    raw: list[dict] = json.loads((data_dir / winrates_file).read_text())
+    entries = [
+        e for e in raw
+        if e["event_id"] in vocabs.event_to_idx and e["char_id"] in vocabs.char_to_idx
+    ]
+
+    M = len(entries)
+    event_idx = np.empty(M, dtype=np.int32)
+    mode_idx = np.empty(M, dtype=np.int32)
+    char_idx = np.empty(M, dtype=np.int32)
+    char_meta_arr = np.empty((M, 3), dtype=np.int32)
+    z_scores = np.empty(M, dtype=np.float32)
+
+    for i, e in enumerate(entries):
+        eid = e["event_id"]
+        cid = e["char_id"]
+        event_idx[i] = vocabs.event_to_idx[eid]
+        mode_idx[i] = vocabs.mode_to_idx[event_mode[eid]]
+        char_idx[i] = vocabs.char_to_idx[cid]
+        char_meta_arr[i] = char_meta[cid]
+        z_scores[i] = e["z_score"]
+
+    return WinrateArrays(
+        event_idx=event_idx,
+        mode_idx=mode_idx,
+        char_idx=char_idx,
+        char_meta=char_meta_arr,
+        z_scores=z_scores,
     )
 
 
