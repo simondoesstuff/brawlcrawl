@@ -9,11 +9,11 @@
 - `workflow/` — Snakemake pipeline; fetches raw JSON from the Brawl Stars API (`$BSTOK`) into `data/`
 - `src/crawl/` — REST client, battle log scraper; fetches and aggregates battle data
 - `src/geneus/` — ML model and training loop (`BrawlModel`, `train` CLI)
-- `src/pick/` — interactive draft-assist REPL (`pick` CLI); ranks map picks and scores 6th picks
+- `src/pick/` — interactive draft-assist REPL (`pick` CLI)
   - `fuzzy.py` — subsequence fuzzy match with shortest-name tiebreak (see `docs/misc_notes.md`)
-  - `score.py` — checkpoint loading, per-brawler z-score ranking, 6th-pick win probability
-  - `display.py` — columnar terminal grid with class-colored brawler names
-  - `main.py` — interactive loop: map → rankings → picks → 6th-pick candidates → repeat
+  - `score.py` — checkpoint loading; `get_q_values` builds draft observations (non-pool brawlers marked `LOCALLY_BANNED`) and calls `DraftQNetwork`; `get_terminal_pick6_scores` vmaps BrawlModel over pick-6 candidates and returns `P(team B wins)`
+  - `display.py` — columnar terminal grid with rarity-colored brawler names
+  - `main.py` — full draft loop: coin flip → 3 ally bans → 3 enemy bans → picks 1–5 (live Q-value grid) → pick-6 win-probability grid (in-place, terminal model); Q-values are z-scored over the post-filter available brawlers; after pick 5 any Enter exits; `$BRAWL_FILTER` (comma-separated names) hides and `LOCALLY_BANNED`-marks non-owned brawlers; filter is toggled with `/` (works in all phases including pick-6); filter defaults per phase: OFF during bans, ON during ally picks, OFF during enemy picks
 - `tests/` — unit tests (no network); `tests/integration/` — API client tests using mocked HTTP
 - `docs/dataset_generation.md` — usage guide for the dataset scraper
 

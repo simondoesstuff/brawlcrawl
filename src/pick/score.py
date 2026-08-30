@@ -9,7 +9,18 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from geneus.data import Vocabs, _build_char_meta_lookup, load_vocabs
+from geneus.data import load_vocabs
+from geneus.draft.env import (
+    AVAILABLE,
+    BAN_PHASE,
+    GLOBALLY_BANNED,
+    LOCALLY_BANNED,
+    PICKED_A,
+    PICKED_B,
+    TURN_SCHEDULE,
+)
+from geneus.draft.model import DraftQNetwork
+from geneus.draft.train import precompute_char_encs
 from geneus.model import BrawlModel
 
 
@@ -19,8 +30,7 @@ class BrawlerInfo:
     name: str
     brawler_class: str
     rarity: str
-    char_idx: int
-    meta: tuple[int, int, int]  # (class_idx, range_idx, destruct_idx)
+    char_idx: int  # vocabulary index
 
 
 @dataclass(frozen=True)
@@ -29,47 +39,176 @@ class EventInfo:
     mode: str
     mode_id: int
     map_name: str
-    event_idx: int
-    mode_idx: int
+    event_idx: int  # vocabulary index
+    mode_idx: int   # vocabulary index
 
 
 @dataclass
 class DraftContext:
-    model: BrawlModel
-    brawlers: list[BrawlerInfo]          # sorted by char_idx
+    q_net: DraftQNetwork
+    terminal_model: BrawlModel
+    char_meta_table: np.ndarray            # [n_chars, 3] int32: (class_idx, range_idx, destruct_idx)
+    char_encs_all: np.ndarray              # [n_events_sorted, n_chars, h]
+    event_enc_row: dict[int, int]          # event vocab_idx → row in char_encs_all
+    brawlers: list[BrawlerInfo]
     events: list[EventInfo]
-    brawler_names: list[str]             # all names, sorted alphabetically, for fuzzy lookup
-    map_names: list[str]                 # all map names, for fuzzy lookup
-    pickrates: dict[int, dict[int, float]]  # char_id → event_id → pickrate z-score
-    _char_idxs: jax.Array               # [n_chars] — parallel with brawlers
-    _char_metas: jax.Array              # [n_chars, 3]
+    brawler_names: list[str]
+    map_names: list[str]
+    n_chars: int                           # total vocabulary chars
+    winrates: dict[int, dict[int, float]]  # char_id → event_id → z_score
+    pickrates: dict[int, dict[int, float]] # char_id → event_id → z_score
     _brawler_by_char_idx: dict[int, BrawlerInfo]
     _brawler_by_name: dict[str, BrawlerInfo]
 
 
+@eqx.filter_jit
+def _q_apply(
+    q_net: DraftQNetwork,
+    char_encs: jax.Array,
+    player_states: jax.Array,
+    turn_token: jax.Array,
+) -> jax.Array:
+    return q_net(char_encs, player_states, turn_token)
+
+
+@eqx.filter_jit
+def _terminal_score_pick6_batch(
+    terminal_model: BrawlModel,
+    event_idx: jax.Array,              # []
+    mode_idx: jax.Array,               # []
+    team_a_chars: jax.Array,           # [3]
+    team_a_meta: jax.Array,            # [3, 3]
+    team_b_partial_chars: jax.Array,   # [2]
+    team_b_partial_meta: jax.Array,    # [2, 3]
+    cand_chars: jax.Array,             # [n]
+    cand_meta: jax.Array,              # [n, 3]
+) -> jax.Array:  # [n] logits, team-A-wins perspective
+    def score_one(c, m):
+        b_chars = jnp.concatenate([team_b_partial_chars, c[None]])
+        b_meta = jnp.concatenate([team_b_partial_meta, m[None]])
+        return terminal_model(event_idx, mode_idx, team_a_chars, team_a_meta, b_chars, b_meta)
+    return jax.vmap(score_one)(cand_chars, cand_meta)
+
+
+def _build_obs(
+    n_chars: int,
+    ally_bans: list[BrawlerInfo],
+    enemy_bans: list[BrawlerInfo],
+    picks: list[tuple[bool, BrawlerInfo]],
+    phase: int,
+    ally_first: bool,
+    local_pool: set[int] | None = None,
+    brawlers: list[BrawlerInfo] | None = None,
+) -> tuple[np.ndarray, int]:
+    """Build the character observation vector and turn token for the acting player.
+
+    local_pool: set of brawler IDs the acting player can select.  Brawlers not in
+    the pool that are still AVAILABLE are marked LOCALLY_BANNED.
+    """
+    obs = np.zeros(n_chars, dtype=np.int32)
+
+    if phase < 3:
+        for b in ally_bans:
+            obs[b.char_idx] = GLOBALLY_BANNED
+        turn_token = BAN_PHASE
+    elif phase < 6:
+        for b in enemy_bans:
+            obs[b.char_idx] = GLOBALLY_BANNED
+        turn_token = BAN_PHASE
+    else:
+        for b in ally_bans + enemy_bans:
+            obs[b.char_idx] = GLOBALLY_BANNED
+        for is_ally, b in picks:
+            obs[b.char_idx] = PICKED_A if (is_ally == ally_first) else PICKED_B
+        pick_idx = phase - 6
+        turn_token = TURN_SCHEDULE[6 + pick_idx][0]
+
+    if local_pool is not None and brawlers is not None:
+        for b in brawlers:
+            if obs[b.char_idx] == AVAILABLE and b.id not in local_pool:
+                obs[b.char_idx] = LOCALLY_BANNED
+
+    return obs, turn_token
+
+
+def _pick6_team_split(
+    picks: list[tuple[bool, BrawlerInfo]],
+) -> tuple[list[BrawlerInfo], list[BrawlerInfo]]:
+    """Split 5 picks into model team A (first-picking) and team B by TURN_SCHEDULE.
+
+    Returns (team_a_picks, team_b_partial) where team_b_partial has 2 entries;
+    the 6th pick (TURN_SCHEDULE[11] = team B seat 2) is always the missing slot.
+    """
+    team_a: list[BrawlerInfo] = []
+    team_b: list[BrawlerInfo] = []
+    for pick_idx, (_, brawler) in enumerate(picks):
+        _, team, _ = TURN_SCHEDULE[6 + pick_idx]
+        (team_a if team == "A" else team_b).append(brawler)
+    return team_a, team_b
+
+
 def load_context(
     data_dir: Path,
-    checkpoint_path: Path,
+    terminal_ckpt: Path,
+    draft_ckpt: Path,
     embed_dim: int = 32,
     hidden_dim: int = 64,
+    d_model: int = 64,
+    n_heads: int = 4,
+    n_layers: int = 2,
 ) -> DraftContext:
     vocabs = load_vocabs(data_dir)
-    char_meta_lookup = _build_char_meta_lookup(data_dir, vocabs)
+
+    terminal_model = BrawlModel(
+        n_events=vocabs.n_events,
+        n_modes=vocabs.n_modes,
+        n_chars=vocabs.n_chars,
+        n_classes=vocabs.n_classes,
+        n_ranges=vocabs.n_ranges,
+        n_destructs=vocabs.n_destructs,
+        embed_dim=embed_dim,
+        hidden_dim=hidden_dim,
+        dropout_p=0.3,
+        key=jax.random.PRNGKey(0),
+    )
+    terminal_model = eqx.tree_deserialise_leaves(terminal_ckpt, terminal_model)
+
+    char_encs_all, event_idxs_arr, _ = precompute_char_encs(terminal_model, vocabs, data_dir)
+    h_terminal = char_encs_all.shape[-1]
+    event_enc_row = {int(event_idxs_arr[i]): i for i in range(len(event_idxs_arr))}
+
+    q_net = DraftQNetwork(
+        h_terminal=h_terminal,
+        d_model=d_model,
+        n_heads=n_heads,
+        n_layers=n_layers,
+        key=jax.random.PRNGKey(0),
+    )
+    q_net = eqx.tree_deserialise_leaves(draft_ckpt, q_net)
 
     bclass: list[dict] = json.loads((data_dir / "brawler_class.json").read_text())
     brawlers: list[BrawlerInfo] = []
     for b in bclass:
         bid = b["id"]
-        if bid in vocabs.char_to_idx and bid in char_meta_lookup:
+        if bid in vocabs.char_to_idx:
             brawlers.append(BrawlerInfo(
                 id=bid,
                 name=b["name"],
                 brawler_class=b["class"],
                 rarity=b["rarity"],
                 char_idx=vocabs.char_to_idx[bid],
-                meta=char_meta_lookup[bid],
             ))
     brawlers.sort(key=lambda b: b.char_idx)
+
+    # char_meta_table[char_idx] = (class_idx, range_idx, destruct_idx)
+    brawler_range_data: list[dict] = json.loads((data_dir / "brawler_effective_range.json").read_text())
+    brawler_destruct_data: list[dict] = json.loads((data_dir / "brawler_destruction.json").read_text())
+    class_map = {x["id"]: vocabs.class_to_idx[x["class"]] for x in bclass}
+    range_map = {x["id"]: vocabs.range_to_idx[x["range"]] for x in brawler_range_data}
+    destruct_map = {x["id"]: vocabs.destruct_to_idx[x["destruction"]] for x in brawler_destruct_data}
+    char_meta_table = np.zeros((vocabs.n_chars, 3), dtype=np.int32)
+    for char_id, cidx in vocabs.char_to_idx.items():
+        char_meta_table[cidx] = [class_map[char_id], range_map[char_id], destruct_map[char_id]]
 
     events_raw: list[dict] = json.loads((data_dir / "events.json").read_text())
     events: list[EventInfo] = []
@@ -84,91 +223,114 @@ def load_context(
                 mode_idx=vocabs.mode_to_idx[e["modeId"]],
             ))
 
-    pickrates_raw: list[dict] = json.loads(
-        (data_dir / "pickrates_leg1_20260827.json").read_text()
-    )
+    winrates_raw: list[dict] = json.loads((data_dir / "winrates_leg1_20260827.json").read_text())
+    winrates: dict[int, dict[int, float]] = {}
+    for entry in winrates_raw:
+        winrates.setdefault(entry["char_id"], {})[entry["event_id"]] = entry["z_score"]
+
+    pickrates_raw: list[dict] = json.loads((data_dir / "pickrates_leg1_20260827.json").read_text())
     pickrates: dict[int, dict[int, float]] = {}
     for entry in pickrates_raw:
         pickrates.setdefault(entry["char_id"], {})[entry["event_id"]] = entry["z_score"]
 
-    key = jax.random.PRNGKey(0)
-    model = BrawlModel(
-        n_events=vocabs.n_events,
-        n_modes=vocabs.n_modes,
-        n_chars=vocabs.n_chars,
-        n_classes=vocabs.n_classes,
-        n_ranges=vocabs.n_ranges,
-        n_destructs=vocabs.n_destructs,
-        embed_dim=embed_dim,
-        hidden_dim=hidden_dim,
-        dropout_p=0.3,
-        key=key,
-    )
-    model = eqx.tree_deserialise_leaves(checkpoint_path, model)
-
-    char_idxs = jnp.array([b.char_idx for b in brawlers])
-    char_metas = jnp.array([list(b.meta) for b in brawlers])
-
     return DraftContext(
-        model=model,
+        q_net=q_net,
+        terminal_model=terminal_model,
+        char_meta_table=char_meta_table,
+        char_encs_all=char_encs_all,
+        event_enc_row=event_enc_row,
         brawlers=brawlers,
         events=events,
         brawler_names=sorted(b.name for b in brawlers),
         map_names=[e.map_name for e in events],
+        n_chars=vocabs.n_chars,
+        winrates=winrates,
         pickrates=pickrates,
-        _char_idxs=char_idxs,
-        _char_metas=char_metas,
         _brawler_by_char_idx={b.char_idx: b for b in brawlers},
         _brawler_by_name={b.name: b for b in brawlers},
     )
 
 
 def score_map(ctx: DraftContext, event: EventInfo) -> list[tuple[BrawlerInfo, float]]:
-    """Predict per-brawler z-scores on a map. Returns sorted descending (best first)."""
-    e_idx = jnp.array(event.event_idx)
-    m_idx = jnp.array(event.mode_idx)
-
-    scores = jax.vmap(
-        lambda ci, cm: ctx.model.predict_winrate(e_idx, m_idx, ci, cm)
-    )(ctx._char_idxs, ctx._char_metas)
-
+    """Rank brawlers by winrate z-score for this event."""
     results = [
-        (ctx._brawler_by_char_idx[int(ci)], float(s))
-        for ci, s in zip(ctx._char_idxs, scores)
+        (b, ctx.winrates.get(b.id, {}).get(event.id, 0.0))
+        for b in ctx.brawlers
     ]
     return sorted(results, key=lambda x: x[1], reverse=True)
 
 
-def score_sixth_pick(
+def get_q_values(
     ctx: DraftContext,
     event: EventInfo,
-    partial_team: list[BrawlerInfo],
-    full_team: list[BrawlerInfo],
-) -> list[tuple[BrawlerInfo, float]]:
-    """Score each candidate as the 6th pick that completes partial_team.
+    ally_bans: list[BrawlerInfo],
+    enemy_bans: list[BrawlerInfo],
+    picks: list[tuple[bool, BrawlerInfo]],
+    phase: int,
+    ally_first: bool,
+    local_pool: set[int] | None = None,
+) -> np.ndarray:
+    """Compute Q-values [n_chars] for the current draft phase.
 
-    partial_team (2 brawlers) is treated as team A; full_team (3) as team B.
-    Returns (brawler, win_prob) sorted descending — best picks for partial_team first.
+    Phase 0-2: ally bans; phase 3-5: enemy bans; phase 6-11: picks 0-5.
+    local_pool: brawler IDs the acting player can select; others are LOCALLY_BANNED.
     """
-    excluded_ids = {b.id for b in partial_team + full_team}
-    candidates = [b for b in ctx.brawlers if b.id not in excluded_ids]
+    obs, turn_token = _build_obs(
+        ctx.n_chars, ally_bans, enemy_bans, picks, phase, ally_first,
+        local_pool=local_pool, brawlers=ctx.brawlers,
+    )
+    enc_row = ctx.event_enc_row[event.event_idx]
+    return np.array(_q_apply(
+        ctx.q_net,
+        jnp.array(ctx.char_encs_all[enc_row], dtype=jnp.float32),
+        jnp.array(obs, dtype=jnp.int32),
+        jnp.array(turn_token, dtype=jnp.int32),
+    ))
 
-    e_idx = jnp.array(event.event_idx)
-    m_idx = jnp.array(event.mode_idx)
-    b_chars = jnp.array([b.char_idx for b in full_team])
-    b_meta = jnp.array([list(b.meta) for b in full_team])
-    p_base_chars = jnp.array([b.char_idx for b in partial_team])
-    p_base_meta = jnp.array([list(b.meta) for b in partial_team])
 
-    def _score(ci: jax.Array, cm: jax.Array) -> jax.Array:
-        a_chars = jnp.concatenate([p_base_chars, ci[None]])
-        a_meta = jnp.concatenate([p_base_meta, cm[None]])
-        logit = ctx.model(e_idx, m_idx, a_chars, a_meta, b_chars, b_meta)
-        return jax.nn.sigmoid(logit)
+def get_terminal_pick6_scores(
+    ctx: DraftContext,
+    event: EventInfo,
+    picks: list[tuple[bool, BrawlerInfo]],
+    excluded: set[int],
+    ally_first: bool = False,
+) -> list[tuple[BrawlerInfo, float]]:
+    """Score pick-6 candidates with the terminal BrawlModel.
 
-    cand_chars = jnp.array([b.char_idx for b in candidates])
-    cand_metas = jnp.array([list(b.meta) for b in candidates])
-    probs = jax.vmap(_score)(cand_chars, cand_metas)
+    Returns (brawler, prob) sorted descending by P(ally wins), where prob is
+    always from the ally's perspective regardless of which team picks last.
+    """
+    team_a_picks, team_b_partial = _pick6_team_split(picks)
 
+    team_a_chars = np.array([b.char_idx for b in team_a_picks], dtype=np.int32)    # [3]
+    team_a_meta = ctx.char_meta_table[team_a_chars]                                  # [3, 3]
+    team_b_partial_chars = np.array([b.char_idx for b in team_b_partial], dtype=np.int32)  # [2]
+    team_b_partial_meta = ctx.char_meta_table[team_b_partial_chars]                  # [2, 3]
+
+    candidates = [b for b in ctx.brawlers if b.id not in excluded]
+    if not candidates:
+        return []
+
+    cand_chars = np.array([b.char_idx for b in candidates], dtype=np.int32)
+    cand_meta = ctx.char_meta_table[cand_chars]  # [n, 3]
+
+    logits = np.array(_terminal_score_pick6_batch(
+        ctx.terminal_model,
+        jnp.array(event.event_idx),
+        jnp.array(event.mode_idx),
+        jnp.array(team_a_chars),
+        jnp.array(team_a_meta),
+        jnp.array(team_b_partial_chars),
+        jnp.array(team_b_partial_meta),
+        jnp.array(cand_chars),
+        jnp.array(cand_meta),
+    ))
+
+    # sigmoid(-logit) = P(team B wins); team B always picks last
+    probs = 1.0 / (1.0 + np.exp(logits))
+    if ally_first:
+        # ally is team A, so team B is the enemy; flip to get P(ally wins)
+        probs = 1.0 - probs
     results = [(b, float(p)) for b, p in zip(candidates, probs)]
-    return sorted(results, key=lambda x: x[1], reverse=True)
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results

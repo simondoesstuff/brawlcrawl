@@ -1,4 +1,4 @@
-"""Interactive draft-assist REPL: rank map picks and score 6th picks."""
+"""Interactive full-draft REPL with DraftQNetwork recommendations."""
 
 import os
 import shutil
@@ -6,6 +6,7 @@ from math import ceil
 from pathlib import Path
 from typing import Annotated
 
+import numpy as np
 import typer
 from prompt_toolkit import Application, PromptSession
 from prompt_toolkit.buffer import Buffer
@@ -18,7 +19,10 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-from pick.constants import ANN_BRAIN, ANN_SECRET, ANN_X, ANNOTATION_SLOT, PICKRATE_HIGH_Z, PICKRATE_LOW_Z, WIN_PROB_THRESHOLD
+from pick.constants import (
+    ANN_BRAIN, ANN_SECRET, ANN_X, ANNOTATION_SLOT,
+    PICKRATE_HIGH_Z, PICKRATE_LOW_Z, Q_THRESHOLD,
+)
 from pick.display import (
     RARITY_COLORS,
     RARITY_PT_STYLES,
@@ -32,12 +36,18 @@ from pick.display import (
     render_rarity_legend,
 )
 from pick.fuzzy import _normalize, _subseq_match, fuzzy_find
-from pick.score import BrawlerInfo, DraftContext, EventInfo, load_context, score_map, score_sixth_pick
+from pick.score import (
+    BrawlerInfo,
+    DraftContext,
+    EventInfo,
+    get_q_values,
+    get_terminal_pick6_scores,
+    load_context,
+    score_map,
+)
 
 typer_app = typer.Typer(add_completion=False, help="Interactive draft-assist REPL.")
 console = Console()
-
-_DEFAULT_EPOCH = 400
 
 _DARK_STYLE = Style.from_dict({
     "completion-menu.completion":               "bg:#111111 fg:ansiwhite",
@@ -49,13 +59,86 @@ _DARK_STYLE = Style.from_dict({
     "scrollbar.button":                         "bg:#444444",
 })
 
-_PHASES = [
-    ("Enemy 1", "enemy"),
-    ("Ally  1", "ally"),
-    ("Ally  2", "ally"),
-    ("Enemy 2", "enemy"),
-    ("Enemy 3", "enemy"),
-]
+# Background colours for brawler states in the draft board
+_BG_BAN = "bg:#1a1a1a"
+_BG_ALLY_PICK = "bg:#002a00"
+_BG_ENEMY_PICK = "bg:#2a0000"
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _z_score_q(q_vals: np.ndarray, available_char_idxs: list[int]) -> np.ndarray:
+    """Normalize Q-values to z-scores over currently available brawlers.
+
+    Z > 0 means above-average advantage relative to the current choice pool.
+    """
+    if not available_char_idxs:
+        return q_vals
+    vals = q_vals[available_char_idxs]
+    mean = float(vals.mean())
+    std = float(vals.std())
+    if std < 1e-8:
+        return np.zeros_like(q_vals)
+    return (q_vals - mean) / std
+
+
+def _ban_excluded(
+    phase: int,
+    ally_bans: list[BrawlerInfo],
+    enemy_bans: list[BrawlerInfo],
+    picks: list[tuple[bool, BrawlerInfo]],
+) -> set[int]:
+    """Brawlers excluded from submission at the given phase.
+
+    During each team's ban phase only their own bans are excluded — the other
+    team's bans remain submittable (inter-team duplicate ban is allowed).
+    During the pick phase all bans and prior picks are excluded.
+    """
+    excl = {b.id for _, b in picks}
+    if phase < 3:
+        excl |= {b.id for b in ally_bans}
+    elif phase < 6:
+        excl |= {b.id for b in enemy_bans}
+    else:
+        excl |= {b.id for b in ally_bans} | {b.id for b in enemy_bans}
+    return excl
+
+
+def _parse_brawl_filter(ctx: DraftContext) -> set[int]:
+    """Parse $BRAWL_FILTER (comma-separated names) into a set of brawler ids.
+
+    Uses fuzzy (subsequence) matching so partial names work.  Silently skips
+    names with no match — callers that want user-visible feedback should call
+    _brawl_filter_names() first and print the results.
+    """
+    raw = os.environ.get("BRAWL_FILTER", "").strip()
+    if not raw:
+        return set()
+    names = [n.strip() for n in raw.replace(",", "\n").splitlines() if n.strip()]
+    ids: set[int] = set()
+    for name in names:
+        matched = fuzzy_find(name, ctx.brawler_names)
+        if matched is not None:
+            ids.add(ctx._brawler_by_name[matched].id)
+    return ids
+
+
+def _brawl_filter_names(ctx: DraftContext) -> tuple[list[str], list[str]]:
+    """Return (matched_brawler_names, unmatched_raw_names) from $BRAWL_FILTER."""
+    raw = os.environ.get("BRAWL_FILTER", "").strip()
+    if not raw:
+        return [], []
+    names = [n.strip() for n in raw.replace(",", "\n").splitlines() if n.strip()]
+    matched: list[str] = []
+    unmatched: list[str] = []
+    for name in names:
+        m = fuzzy_find(name, ctx.brawler_names)
+        if m is not None:
+            if m not in matched:
+                matched.append(m)
+        else:
+            unmatched.append(name)
+    return matched, unmatched
 
 
 # ── fuzzy completer ───────────────────────────────────────────────────────────
@@ -122,24 +205,24 @@ def _rprompt_map(session: PromptSession, ctx: DraftContext):
 
 # ── annotation helpers ────────────────────────────────────────────────────────
 
-def sixth_pick_annotations(
+def pick_annotations(
     ctx: DraftContext,
     event: EventInfo,
-    sixth_scores: list[tuple[BrawlerInfo, float]],
+    q_scores: list[tuple[BrawlerInfo, float]],
 ) -> dict[int, str]:
-    """Return per-brawler-id annotation for the 6th-pick table.
+    """Annotate available brawlers based on Q-value and pickrate.
 
-    Brain icon: model ≥50% win, below-average pickrate (hidden gem).
-    X icon:     model <50% win, high pickrate (overrated by players).
+    Brain: Q > 0 and below-average pickrate (hidden gem for this state).
+    X:     Q ≤ 0 and high pickrate (overrated by players).
     """
     result: dict[int, str] = {}
-    for brawler, win_prob in sixth_scores:
+    for brawler, q_val in q_scores:
         pz = ctx.pickrates.get(brawler.id, {}).get(event.id)
         if pz is None:
             continue
-        if win_prob >= WIN_PROB_THRESHOLD and pz < PICKRATE_LOW_Z:
+        if q_val > Q_THRESHOLD and pz < PICKRATE_LOW_Z:
             result[brawler.id] = ANN_BRAIN
-        elif win_prob < WIN_PROB_THRESHOLD and pz >= PICKRATE_HIGH_Z:
+        elif q_val <= Q_THRESHOLD and pz >= PICKRATE_HIGH_Z:
             result[brawler.id] = ANN_X
     return result
 
@@ -149,10 +232,10 @@ def overview_annotations(
     event: EventInfo,
     map_scores: list[tuple[BrawlerInfo, float]],
 ) -> dict[int, str]:
-    """Return per-brawler-id annotation for the overview table.
+    """Annotate brawlers for the winrate overview.
 
-    Secret icon: good map score (≥0), below-average pickrate (hidden gem).
-    X icon:      poor map score (<0), high pickrate (overrated by players).
+    Secret: above-average winrate z-score and below-average pickrate.
+    X:      below-average winrate z-score and high pickrate.
     """
     result: dict[int, str] = {}
     for brawler, win_score in map_scores:
@@ -166,40 +249,86 @@ def overview_annotations(
     return result
 
 
-# ── team assembly Application ─────────────────────────────────────────────────
+# ── pick order helpers ────────────────────────────────────────────────────────
 
-def _run_team_assembly(
+def _pick_is_ally(pick_idx: int, ally_first: bool) -> bool:
+    """True if pick_idx (0-5) belongs to the ally team."""
+    from geneus.draft.env import TURN_SCHEDULE
+    _, team, _ = TURN_SCHEDULE[6 + pick_idx]
+    return (team == "A") == ally_first
+
+
+def _phase_default_filter(phase: int, ally_first: bool) -> bool:
+    """Default filter-on state for the given draft phase.
+
+    Ban phases (0-5): OFF.  Pick phases: ON when it's the ally's turn.
+    Phase 11 (terminal/6th pick) follows pick_idx 5 — team B.
+    """
+    if phase < 6:
+        return False
+    return _pick_is_ally(phase - 6, ally_first)
+
+
+def _phase_label(phase: int, ally_first: bool) -> str:
+    if phase < 3:
+        return f"Ally ban {phase + 1}"
+    if phase < 6:
+        return f"Enemy ban {phase - 3 + 1}"
+    pick_idx = phase - 6
+    label = "Ally" if _pick_is_ally(pick_idx, ally_first) else "Enemy"
+    return f"Pick {pick_idx + 1}  ({label})"
+
+
+# ── draft Application ─────────────────────────────────────────────────────────
+
+def _run_draft(
     ctx: DraftContext,
     event: EventInfo,
     map_scores: list[tuple[BrawlerInfo, float]],
-    ann: dict[int, str] | None = None,
-    filter_ids: set[int] | None = None,
-    filter_enabled: list[bool] | None = None,
-) -> tuple[list[BrawlerInfo], list[BrawlerInfo]] | None:
-    """Interactive team assembly with live grid highlights.
-
-    Returns (allies, enemies) or None if cancelled.
-    """
-    submitted: list[tuple[str, BrawlerInfo]] = []  # (role, brawler)
+    ann: dict[int, str],
+    ally_first: bool,
+    filter_ids: set[int],
+) -> tuple[list[BrawlerInfo], list[BrawlerInfo], list[tuple[bool, BrawlerInfo]]] | None:
+    """Run the full draft; shows pick-6 recommendations in-place before exit."""
+    phase = [0]
+    ally_bans: list[BrawlerInfo] = []
+    enemy_bans: list[BrawlerInfo] = []
+    picks: list[tuple[bool, BrawlerInfo]] = []
     cancelled = [False]
-    error_msg = [""]
-    _ann = ann or {}
+    error = [""]
+    q_cache: list[np.ndarray | None] = [None]
+    terminal_cache: list[list[tuple[BrawlerInfo, float]]] = [[]]
+    final_mode = [False]
 
-    def _excluded() -> set[int]:
-        return {b.id for _, b in submitted}
+    filter_on = [False]  # phase 0 = ally ban: default OFF
 
-    def _available() -> list[str]:
-        excl = _excluded()
-        return [b.name for b in ctx.brawlers if b.id not in excl]
+    def _local_pool() -> set[int] | None:
+        return filter_ids if (filter_on[0] and filter_ids) else None
+
+    def _refresh_q_cache() -> None:
+        q_cache[0] = get_q_values(
+            ctx, event, ally_bans, enemy_bans, picks, phase[0], ally_first,
+            local_pool=_local_pool(),
+        )
+
+    _refresh_q_cache()
+
+    # Phase-aware exclusion for submission/completions (inter-team ban sharing)
+    def _submit_excluded() -> set[int]:
+        return _ban_excluded(phase[0], ally_bans, enemy_bans, picks)
+
+    # Display exclusion: remove all banned/picked from the ranked grid
+    def _display_excluded() -> set[int]:
+        return {b.id for b in ally_bans} | {b.id for b in enemy_bans} | {b.id for _, b in picks}
 
     buf = Buffer(
-        name="pick",
+        name="draft",
         multiline=False,
-        completer=DynamicCompleter(lambda: _brawler_completer(ctx, _excluded())),
+        completer=DynamicCompleter(lambda: _brawler_completer(ctx, _submit_excluded())),
         complete_while_typing=True,
     )
 
-    # ── grid content (re-rendered on every keystroke) ──────────────────────
+    # ── grid content ────────────────────────────────────────────────────────
     def _grid_content() -> FormattedText:
         try:
             term_w = shutil.get_terminal_size().columns
@@ -207,31 +336,116 @@ def _run_team_assembly(
             term_w = 80
 
         current_text = buf.text
+        submit_excl = _submit_excluded()
+        display_excl = _display_excluded()
+
         best_match_id: int | None = None
-        if current_text.strip():
-            m = fuzzy_find(current_text, _available())
+        if current_text.strip() and not final_mode[0]:
+            avail = [b.name for b in ctx.brawlers if b.id not in submit_excl]
+            m = fuzzy_find(current_text, avail)
             if m:
                 best_match_id = ctx._brawler_by_name[m].id
-
-        submitted_roles: dict[int, str] = {b.id: role for role, b in submitted}
-
-        col_w = _COL_WIDTH + ANNOTATION_SLOT
-        n_cols = max(1, (term_w + _COL_GAP) // (col_w + _COL_GAP))
-
-        above = [(b, s) for b, s in map_scores if s >= 0]
-        below = [(b, s) for b, s in map_scores if s < 0]
 
         result: list[tuple[str, str]] = []
 
         # Header
-        phase_label = ""
-        if len(submitted) < len(_PHASES):
-            label, _ = _PHASES[len(submitted)]
-            phase_label = f"   entering {label.lower()}"
+        p_label = _phase_label(phase[0], ally_first)
+        if final_mode[0]:
+            p_label += "  (/ filter  ↵ finish)"
+        flip_label = "Ally 1st" if ally_first else "Enemy 1st"
+        filter_label = "  [filter]" if (filter_ids and filter_on[0]) else ""
         result += [
             ("bold", f"\n  {event.map_name}"),
-            ("fg:ansibrightblack", f"  {event.mode}{phase_label}\n\n"),
+            ("fg:ansibrightblack", f"  {event.mode}"),
+            ("fg:ansibrightblack", f"  [{flip_label}]"),
+            ("bold", f"   {p_label}"),
+            ("fg:#555555", filter_label),
+            ("bold", "\n\n"),
         ]
+
+        # Draft board: bans
+        result.append(("fg:ansibrightblack", "  Bans  "))
+        ally_ban_cells = [
+            (f"{RARITY_PT_STYLES.get(b.rarity, '')} {_BG_BAN}", f" {b.name} ")
+            for b in ally_bans
+        ]
+        enemy_ban_cells = [
+            (f"{RARITY_PT_STYLES.get(b.rarity, '')} {_BG_BAN}", f" {b.name} ")
+            for b in enemy_bans
+        ]
+        result.append(("fg:#00afff bold", "Ally "))
+        for style, txt in ally_ban_cells:
+            result += [(style, txt), ("", " ")]
+        for _ in range(3 - len(ally_bans)):
+            result.append(("fg:ansibrightblack", " □ "))
+        result.append(("fg:ansibrightblack", "  "))
+        result.append(("fg:ansired bold", "Enemy "))
+        for style, txt in enemy_ban_cells:
+            result += [(style, txt), ("", " ")]
+        for _ in range(3 - len(enemy_bans)):
+            result.append(("fg:ansibrightblack", " □ "))
+        result.append(("", "\n"))
+
+        # Draft board: picks
+        if picks or phase[0] >= 6:
+            result.append(("fg:ansibrightblack", "  Picks "))
+            for slot_idx in range(6):
+                is_ally_slot = _pick_is_ally(slot_idx, ally_first)
+                if slot_idx < len(picks):
+                    _, b = picks[slot_idx]
+                    bg = _BG_ALLY_PICK if is_ally_slot else _BG_ENEMY_PICK
+                    rar_s = RARITY_PT_STYLES.get(b.rarity, "")
+                    result.append((f"{rar_s} {bg}", f" {b.name} "))
+                elif slot_idx == phase[0] - 6 and not final_mode[0]:
+                    team_c = "fg:#00afff bold" if is_ally_slot else "fg:ansired bold"
+                    result.append((team_c, " ? "))
+                else:
+                    result.append(("fg:ansibrightblack", " □ "))
+                result.append(("", " "))
+            result.append(("", "\n"))
+
+        result.append(("", "\n"))
+
+        # Brawler grid
+        col_w = _COL_WIDTH + ANNOTATION_SLOT
+        n_cols = max(1, (term_w + _COL_GAP) // (col_w + _COL_GAP))
+
+        if final_mode[0]:
+            # Pick-6: terminal model win probabilities, filtered if filter is on
+            scored = terminal_cache[0]
+            if filter_on[0] and filter_ids:
+                scored = [(b, s) for b, s in scored if b.id in filter_ids]
+            score_str_fn = lambda s: f"{s:.1%}"
+            split_threshold = 0.5
+            p_ann: dict[int, str] = {}
+        elif q_cache[0] is not None:
+            if filter_on[0] and filter_ids:
+                q_norm_idxs = [b.char_idx for b in ctx.brawlers
+                               if b.id not in display_excl and b.id in filter_ids]
+            else:
+                q_norm_idxs = [b.char_idx for b in ctx.brawlers if b.id not in display_excl]
+            q_z = _z_score_q(q_cache[0], q_norm_idxs)
+            scored = [
+                (ctx._brawler_by_char_idx[b.char_idx], float(q_z[b.char_idx]))
+                for b in ctx.brawlers
+                if b.char_idx in ctx._brawler_by_char_idx and b.id not in display_excl
+            ]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            if filter_on[0] and filter_ids:
+                scored = [(b, s) for b, s in scored if b.id in filter_ids]
+            score_str_fn = lambda s: f"{s:+.2f}"
+            split_threshold = Q_THRESHOLD
+            p_ann = pick_annotations(ctx, event, scored) if phase[0] >= 6 else ann
+        else:
+            scored = [(b, s) for b, s in map_scores if b.id not in display_excl]
+            if filter_on[0] and filter_ids:
+                scored = [(b, s) for b, s in scored if b.id in filter_ids]
+            score_str_fn = lambda s: f"{s:+.2f}"
+            split_threshold = Q_THRESHOLD
+            p_ann = ann
+
+        above = [(b, s) for b, s in scored if s >= split_threshold]
+        below = [(b, s) for b, s in scored if s < split_threshold]
 
         def _render_section(section: list[tuple[BrawlerInfo, float]], rank_offset: int) -> None:
             n = len(section)
@@ -247,40 +461,26 @@ def _run_team_assembly(
                         continue
 
                     brawler, score = section[idx]
-                    score_str = f"{score:+.2f}"
+                    score_str = score_str_fn(score)
                     rar_style = RARITY_PT_STYLES.get(brawler.rarity, "")
-
                     rank_sep = "."
-                    if brawler.id in submitted_roles:
-                        role = submitted_roles[brawler.id]
-                        bg = "bg:#2a0000" if role == "enemy" else "bg:#002a00"
-                        rank_s = f"fg:ansibrightblack {bg}"
-                        name_s = f"{rar_style} {bg}"
-                        ann_s  = f"fg:ansibrightblack {bg}"
-                        score_s = bg
-                    elif brawler.id == best_match_id:
+
+                    if brawler.id == best_match_id:
                         rank_sep = "▸"
                         rank_s = "fg:ansibrightblack bold bg:#1e1e00"
                         name_s = f"{rar_style} bold bg:#1e1e00"
                         ann_s  = "fg:ansibrightblack bold bg:#1e1e00"
                         score_s = "bold bg:#1e1e00"
                     else:
-                        is_dim = (
-                            filter_enabled is not None
-                            and filter_enabled[0]
-                            and filter_ids
-                            and brawler.id not in filter_ids
-                        )
                         rank_s = "fg:ansibrightblack"
-                        name_s = "fg:ansibrightblack" if is_dim else rar_style
+                        name_s = rar_style
                         ann_s  = "fg:ansibrightblack"
-                        score_s = "fg:ansibrightblack" if is_dim else ""
+                        score_s = ""
 
                     result.append((rank_s, f"{rank_offset + idx + 1:>{_RANK_WIDTH}}{rank_sep} "))
                     result.append((name_s, f"{brawler.name:<{_MAX_NAME_LEN}}"))
-                    result.append((ann_s, _ann.get(brawler.id, " " * ANNOTATION_SLOT)))
+                    result.append((ann_s, p_ann.get(brawler.id, " " * ANNOTATION_SLOT)))
                     result.append((score_s, f"{score_str:>{_SCORE_WIDTH}}"))
-
                     if col < n_cols - 1:
                         result.append(("", "  "))
 
@@ -291,62 +491,76 @@ def _run_team_assembly(
             result.append(("fg:ansiwhite", "─" * term_w + "\n"))
         _render_section(below, len(above))
 
-        # Submitted summary
-        if submitted:
-            result.append(("", "\n"))
-            for role, b in submitted:
-                role_label = "Enemy" if role == "enemy" else "Ally "
-                bg = "bg:#2a0000" if role == "enemy" else "bg:#002a00"
-                rar_s = RARITY_PT_STYLES.get(b.rarity, "")
-                result += [
-                    ("fg:ansibrightblack", f"  {role_label}  "),
-                    (f"{rar_s} {bg}", f"{b.name:<{_MAX_NAME_LEN}}"),
-                    ("fg:ansibrightblack", f"  {b.brawler_class}\n"),
-                ]
-
-        # Error
-        if error_msg[0]:
-            result += [("", "\n"), ("fg:ansired", f"  {error_msg[0]}\n")]
+        if error[0]:
+            result += [("", "\n"), ("fg:ansired", f"  {error[0]}\n")]
 
         result.append(("", "\n"))
         return FormattedText(result)
 
-    # ── input prompt prefix ────────────────────────────────────────────────
+    # ── input prompt prefix ──────────────────────────────────────────────────
     def _line_prefix(_line_num, _wrap_count) -> FormattedText:
-        if len(submitted) < len(_PHASES):
-            label, _ = _PHASES[len(submitted)]
-            return FormattedText([("bold", f"  {label}> ")])
-        return FormattedText([])
+        if final_mode[0]:
+            return FormattedText([("fg:ansibrightblack", "  (/ filter  ↵ finish)  ")])
+        label = _phase_label(phase[0], ally_first)
+        return FormattedText([("bold", f"  {label}> ")])
 
-    # ── key bindings ───────────────────────────────────────────────────────
+    # ── key bindings ─────────────────────────────────────────────────────────
     kb = KeyBindings()
 
     @kb.add("enter")
     def _submit(ev):
         text = buf.text.strip()
-        if not text:
-            return
-        if text == "/" and filter_enabled is not None and filter_ids:
-            filter_enabled[0] = not filter_enabled[0]
+
+        # "/" toggles filter in any mode; no exit
+        if text == "/":
+            if filter_ids:
+                filter_on[0] = not filter_on[0]
+                if not final_mode[0]:
+                    _refresh_q_cache()
             buf.reset()
             return
-        idx = len(submitted)
-        if idx >= len(_PHASES):
+
+        # In final mode any other Enter exits
+        if final_mode[0]:
+            ev.app.exit()
             return
 
-        available = _available()
-        matched = fuzzy_find(text, available)
+        if not text:
+            return
+
+        p = phase[0]
+        avail = [b.name for b in ctx.brawlers if b.id not in _submit_excluded()]
+        matched = fuzzy_find(text, avail)
         if matched is None:
-            error_msg[0] = f"No brawler matching '{text}'"
+            error[0] = f"No brawler matching '{text}'"
+            buf.reset()
             return
 
-        error_msg[0] = ""
-        _, role = _PHASES[idx]
-        submitted.append((role, ctx._brawler_by_name[matched]))
+        error[0] = ""
+        brawler = ctx._brawler_by_name[matched]
+
+        if p < 3:
+            ally_bans.append(brawler)
+        elif p < 6:
+            enemy_bans.append(brawler)
+        else:
+            pick_idx = p - 6
+            is_ally = _pick_is_ally(pick_idx, ally_first)
+            picks.append((is_ally, brawler))
+
+        phase[0] += 1
         buf.reset()
 
-        if len(submitted) >= len(_PHASES):
-            ev.app.exit()
+        if phase[0] >= 11:
+            filter_on[0] = _phase_default_filter(11, ally_first)
+            terminal_cache[0] = get_terminal_pick6_scores(
+                ctx, event, picks, _display_excluded(), ally_first=ally_first,
+            )
+            final_mode[0] = True
+            return
+
+        filter_on[0] = _phase_default_filter(phase[0], ally_first)
+        _refresh_q_cache()
 
     @kb.add("c-c")
     @kb.add("c-d")
@@ -354,7 +568,7 @@ def _run_team_assembly(
         cancelled[0] = True
         ev.app.exit()
 
-    # ── layout ─────────────────────────────────────────────────────────────
+    # ── layout ───────────────────────────────────────────────────────────────
     grid_win = Window(
         content=FormattedTextControl(_grid_content, focusable=False),
         wrap_lines=False,
@@ -372,37 +586,17 @@ def _run_team_assembly(
         focused_element=input_win,
     )
 
-    app_inst = Application(
+    Application(
         layout=layout,
         key_bindings=kb,
         style=_DARK_STYLE,
         full_screen=False,
         mouse_support=False,
-    )
-    app_inst.run()
+    ).run()
 
     if cancelled[0]:
         return None
-
-    enemies = [b for role, b in submitted if role == "enemy"]
-    allies = [b for role, b in submitted if role == "ally"]
-    return allies, enemies
-
-
-# ── checkpoint helpers ────────────────────────────────────────────────────────
-
-def _resolve_checkpoint(data_dir: Path, override: Path | None) -> Path:
-    if override is not None:
-        return override
-    ckpt_dir = data_dir / "model" / "checkpoints"
-    preferred = ckpt_dir / f"model_epoch_{_DEFAULT_EPOCH:04d}.eqx"
-    if preferred.exists():
-        return preferred
-    candidates = sorted(ckpt_dir.glob("model_epoch_*.eqx"))
-    if not candidates:
-        console.print(f"[red]No checkpoints found in {ckpt_dir}[/red]")
-        raise SystemExit(1)
-    return candidates[-1]
+    return ally_bans, enemy_bans, picks
 
 
 # ── main loop ─────────────────────────────────────────────────────────────────
@@ -410,14 +604,22 @@ def _resolve_checkpoint(data_dir: Path, override: Path | None) -> Path:
 @typer_app.command()
 def main(
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = Path("data"),
-    checkpoint: Annotated[Path | None, typer.Option(help="Checkpoint .eqx file")] = None,
-    embed_dim: Annotated[int, typer.Option(help="Model embedding dimension")] = 32,
-    hidden_dim: Annotated[int, typer.Option(help="Model hidden dimension")] = 64,
+    terminal_ckpt: Annotated[Path, typer.Option(help="Frozen BrawlModel checkpoint (.eqx)")] = Path("data/model/model.eqx"),
+    draft_ckpt: Annotated[Path, typer.Option(help="Draft Q-network weights (.eqx)")] = Path("data/draft_model/draft_q.eqx"),
+    embed_dim: Annotated[int, typer.Option(help="BrawlModel embedding dimension")] = 32,
+    hidden_dim: Annotated[int, typer.Option(help="BrawlModel hidden dimension")] = 64,
+    d_model: Annotated[int, typer.Option(help="DraftQNetwork d_model")] = 64,
+    n_heads: Annotated[int, typer.Option(help="DraftQNetwork attention heads")] = 4,
+    n_layers: Annotated[int, typer.Option(help="DraftQNetwork transformer layers")] = 2,
 ) -> None:
-    ckpt = _resolve_checkpoint(data_dir, checkpoint)
-    console.print(f"Loading [dim]{ckpt.name}[/dim]...")
+    console.print(f"Loading terminal model [dim]{terminal_ckpt}[/dim]...")
+    console.print(f"Loading draft model    [dim]{draft_ckpt}[/dim]...")
 
-    ctx = load_context(data_dir, ckpt, embed_dim=embed_dim, hidden_dim=hidden_dim)
+    ctx = load_context(
+        data_dir, terminal_ckpt, draft_ckpt,
+        embed_dim=embed_dim, hidden_dim=hidden_dim,
+        d_model=d_model, n_heads=n_heads, n_layers=n_layers,
+    )
     console.print(
         f"Ready — [bold]{len(ctx.brawlers)}[/bold] brawlers, "
         f"[bold]{len(ctx.events)}[/bold] maps. "
@@ -426,20 +628,12 @@ def main(
     render_rarity_legend(console)
     render_annotation_legend(console)
 
-    filter_env = os.environ.get("BRAWL_FILTER", "")
-    filter_names = [p.strip() for p in filter_env.split(",") if p.strip()]
-    filter_ids: set[int] = set()
-    if filter_names:
-        for partial in filter_names:
-            matched = fuzzy_find(partial, ctx.brawler_names)
-            if matched is None:
-                console.print(f"  [red]No brawler matching '{partial}'[/red]")
-            else:
-                filter_ids.add(ctx._brawler_by_name[matched].id)
-        if filter_ids:
-            resolved = [b.name for b in ctx.brawlers if b.id in filter_ids]
-            console.print(f"  Filter: {', '.join(resolved)}\n")
-    filter_enabled: list[bool] = [bool(filter_ids)]
+    filter_ids = _parse_brawl_filter(ctx)
+    matched_names, unmatched_names = _brawl_filter_names(ctx)
+    for name in unmatched_names:
+        console.print(f"  [red]No brawler matching '{name}' in $BRAWL_FILTER[/red]")
+    if filter_ids:
+        console.print(f"  Filter ({len(filter_ids)}): {', '.join(sorted(matched_names))}\n")
 
     session: PromptSession = PromptSession(style=_DARK_STYLE)
     last_event: EventInfo | None = None
@@ -453,12 +647,6 @@ def main(
                 completer=_map_completer(ctx),
                 complete_while_typing=True,
             ).strip()
-
-            if map_raw == "/" and filter_ids:
-                filter_enabled[0] = not filter_enabled[0]
-                state = "on" if filter_enabled[0] else "off"
-                console.print(f"  [dim]Filter {state}[/dim]\n")
-                continue
 
             if not map_raw:
                 if last_event is None:
@@ -476,37 +664,34 @@ def main(
             map_scores = score_map(ctx, event)
             ov_ann = overview_annotations(ctx, event, map_scores)
 
-            # ── Team assembly (with live grid) ─────────────────────────────
-            result = _run_team_assembly(
-                ctx, event, map_scores, ann=ov_ann,
-                filter_ids=filter_ids, filter_enabled=filter_enabled,
+            # Show winrate overview
+            console.print(f"\n  [bold]{event.map_name}[/bold]  [dim]{event.mode}[/dim]")
+            render_brawler_table(
+                console, map_scores,
+                score_fmt=lambda s: f"{s:+.2f}",
+                annotations=ov_ann,
+                divider=0.0,
+                annotation_slot=ANNOTATION_SLOT,
+                filter_ids=filter_ids or None,
             )
+            console.print()
+
+            # ── Coin flip ──────────────────────────────────────────────────
+            while True:
+                flip_raw = session.prompt("  Ally first? [y/n]> ").strip().lower()
+                if flip_raw in ("y", "yes"):
+                    ally_first = True
+                    break
+                if flip_raw in ("n", "no"):
+                    ally_first = False
+                    break
+                console.print("  [red]Type y or n[/red]")
+
+            # ── Full draft (bans + picks 1–5; pick-6 shown in Application) ─
+            result = _run_draft(ctx, event, map_scores, ov_ann, ally_first, filter_ids)
             if result is None:
                 console.print("  [dim](cancelled)[/dim]\n")
                 continue
-            allies, enemies = result
-
-            # ── 6th pick ───────────────────────────────────────────────────
-            def _colored(b: BrawlerInfo) -> str:
-                c = RARITY_COLORS.get(b.rarity, "white")
-                return f"[bold {c}]{b.name}[/bold {c}]"
-
-            console.print(
-                f"\n  Enemy: {'  +  '.join(_colored(b) for b in enemies)}\n"
-                f"  Ally:  {'  +  '.join(_colored(b) for b in allies)}  +  [bold dim]?[/bold dim]\n"
-            )
-
-            sixth_scores = score_sixth_pick(ctx, event, allies, enemies)
-            annotations = sixth_pick_annotations(ctx, event, sixth_scores)
-            render_brawler_table(
-                console, sixth_scores,
-                score_fmt=lambda s: f"{s * 100:.1f}%",
-                annotations=annotations,
-                divider=WIN_PROB_THRESHOLD,
-                annotation_slot=ANNOTATION_SLOT,
-                filter_ids=filter_ids if filter_enabled[0] else None,
-            )
-            console.print()
 
     except (KeyboardInterrupt, EOFError):
         console.print("\n[dim]Goodbye.[/dim]")
