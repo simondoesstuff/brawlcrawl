@@ -513,6 +513,7 @@ def train(
     checkpoint_every: Annotated[int, typer.Option(help="Save checkpoint every N iters (0=off)")] = 5000,
     log_every: Annotated[int, typer.Option(help="Log interval in iterations")] = 100,
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
+    resume_from: Annotated[Path | None, typer.Option(help="Checkpoint dir to resume from")] = None,
 ) -> None:
     typer.echo("Loading vocabs and terminal model...")
     vocabs = load_vocabs(data_dir)
@@ -569,9 +570,17 @@ def train(
 
     best_loss = float("inf")
     loss_history: list[float] = []
+    start_iter = 1
 
-    typer.echo(f"\nTraining for {n_iters} iterations ({batch_episodes} episodes/step)...")
-    pbar = tqdm(range(1, n_iters + 1), desc="Draft RL", unit="iter")
+    if resume_from is not None:
+        q_net, opt_state, rng, resumed_iter, best_loss, loss_history = load_checkpoint(
+            resume_from, q_net, opt_state, rng
+        )
+        start_iter = resumed_iter + 1
+        typer.echo(f"  Resumed from iter {resumed_iter}  (best_loss={best_loss:.4f})")
+
+    typer.echo(f"\nTraining iters {start_iter}–{n_iters} ({batch_episodes} episodes/step)...")
+    pbar = tqdm(range(start_iter, n_iters + 1), desc="Draft RL", unit="iter")
     for i in pbar:
         batch = simulate_batch(
             q_net, char_encs_all, event_idxs, mode_idxs,
