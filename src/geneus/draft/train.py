@@ -378,6 +378,117 @@ def load_checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# Win-rate evaluation vs random opponent
+# ---------------------------------------------------------------------------
+
+def _eval_episode(
+    q_net: DraftQNetwork,
+    char_encs_all: np.ndarray,
+    event_idxs: np.ndarray,
+    mode_idxs: np.ndarray,
+    char_meta_table: np.ndarray,
+    terminal_model: BrawlModel,
+    config: DraftConfig,
+    rng: np.random.Generator,
+    eval_team: str,
+    eval_temp: float,
+) -> bool:
+    """One episode: eval_team uses Q-net at eval_temp, opponent plays uniformly at random.
+    Returns True if eval_team wins (terminal logit favours them)."""
+    n_events = len(event_idxs)
+    n_chars = char_encs_all.shape[1]
+    event_i = int(rng.integers(0, n_events))
+    char_encs = char_encs_all[event_i]
+
+    player_configs: list[PlayerConfig] = []
+    for i in range(6):
+        team = "A" if i < 3 else "B"
+        pool_size = int(rng.integers(config.pool_min, config.pool_max + 1))
+        perm = rng.permutation(n_chars)
+        local_pool = np.zeros(n_chars, dtype=bool)
+        local_pool[perm[:pool_size]] = True
+        player_configs.append(PlayerConfig(local_pool=local_pool, temperature=eval_temp, team=team))
+
+    state = DraftState(
+        team_a_bans=np.zeros(n_chars, dtype=bool),
+        team_b_bans=np.zeros(n_chars, dtype=bool),
+        picks_a=np.zeros(n_chars, dtype=bool),
+        picks_b=np.zeros(n_chars, dtype=bool),
+        char_encs=char_encs,
+        event_idx=int(event_idxs[event_i]),
+        mode_idx=int(mode_idxs[event_i]),
+        player_configs=player_configs,
+    )
+
+    for turn_idx in range(12):
+        token, team, seat = TURN_SCHEDULE[turn_idx]
+        obs = get_player_observed_states(state, turn_idx)
+        mask = get_valid_action_mask(state, turn_idx)
+
+        if team == eval_team:
+            q_vals = np.array(_q_apply(
+                q_net,
+                jnp.array(char_encs, dtype=jnp.float32),
+                jnp.array(obs, dtype=jnp.int32),
+                jnp.array(token, dtype=jnp.int32),
+            ))
+            q_masked = np.where(mask, q_vals, -np.inf)
+            action = int(rng.choice(n_chars, p=_softmax(q_masked / max(eval_temp, 1e-6))))
+        else:
+            valid_idxs = np.where(mask)[0]
+            action = int(rng.choice(valid_idxs))
+
+        state = step(state, action, turn_idx)
+
+    picks_a_idxs = np.where(state.picks_a)[0]
+    picks_b_idxs = np.where(state.picks_b)[0]
+    logit = float(_terminal_logit(
+        terminal_model,
+        jnp.array(state.event_idx, dtype=jnp.int32),
+        jnp.array(state.mode_idx, dtype=jnp.int32),
+        jnp.array(picks_a_idxs, dtype=jnp.int32),
+        jnp.array(char_meta_table[picks_a_idxs], dtype=jnp.int32),
+        jnp.array(picks_b_idxs, dtype=jnp.int32),
+        jnp.array(char_meta_table[picks_b_idxs], dtype=jnp.int32),
+    ))
+    return (logit > 0) if eval_team == "A" else (logit < 0)
+
+
+def evaluate_vs_random(
+    q_net: DraftQNetwork,
+    char_encs_all: np.ndarray,
+    event_idxs: np.ndarray,
+    mode_idxs: np.ndarray,
+    char_meta_table: np.ndarray,
+    terminal_model: BrawlModel,
+    config: DraftConfig,
+    rng: np.random.Generator,
+    n_episodes: int = 400,
+    eval_temp: float = 0.1,
+) -> dict[str, float]:
+    """Evaluate Q-net win rate vs a uniformly-random opponent over n_episodes.
+    Plays n_episodes//2 as team A and n_episodes//2 as team B to remove first-pick bias.
+    Returns win rates as A, as B, and combined."""
+    half = n_episodes // 2
+    wins_a = sum(
+        _eval_episode(q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+                      terminal_model, config, rng, "A", eval_temp)
+        for _ in range(half)
+    )
+    wins_b = sum(
+        _eval_episode(q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+                      terminal_model, config, rng, "B", eval_temp)
+        for _ in range(half)
+    )
+    return {
+        "win_rate_as_a": wins_a / half,
+        "win_rate_as_b": wins_b / half,
+        "win_rate_combined": (wins_a + wins_b) / (2 * half),
+        "n_episodes": n_episodes,
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -482,6 +593,124 @@ def train(
             pbar.set_postfix(loss=f"{mean_loss:.4f}", best=f"{best_loss:.4f}")
 
     typer.echo(f"\nBest loss: {best_loss:.5f}  →  {out}")
+
+
+def _load_terminal_model_and_encs(
+    terminal_ckpt: Path,
+    data_dir: Path,
+    terminal_embed_dim: int,
+    terminal_hidden_dim: int,
+) -> tuple[BrawlModel, np.ndarray, np.ndarray, np.ndarray, np.ndarray, "Vocabs"]:
+    vocabs = load_vocabs(data_dir)
+    terminal_model = BrawlModel(
+        n_events=vocabs.n_events, n_modes=vocabs.n_modes, n_chars=vocabs.n_chars,
+        n_classes=vocabs.n_classes, n_ranges=vocabs.n_ranges, n_destructs=vocabs.n_destructs,
+        embed_dim=terminal_embed_dim, hidden_dim=terminal_hidden_dim,
+        key=jax.random.PRNGKey(0),
+    )
+    terminal_model = eqx.tree_deserialise_leaves(terminal_ckpt, terminal_model)
+    char_encs_all, event_idxs, mode_idxs = precompute_char_encs(terminal_model, vocabs, data_dir)
+    char_meta_table = _build_char_meta_table(vocabs, data_dir)
+    return terminal_model, char_encs_all, event_idxs, mode_idxs, char_meta_table, vocabs
+
+
+@app.command()
+def eval(
+    checkpoint: Annotated[Path, typer.Argument(help="Checkpoint dir (contains model.eqx + meta.json)")],
+    terminal_ckpt: Annotated[Path, typer.Option()] = Path("data/model/model.eqx"),
+    data_dir: Annotated[Path, typer.Option()] = _DATA_DIR,
+    terminal_embed_dim: Annotated[int, typer.Option()] = 32,
+    terminal_hidden_dim: Annotated[int, typer.Option()] = 64,
+    n_episodes: Annotated[int, typer.Option(help="Eval episodes (split evenly A/B)")] = 400,
+    eval_temp: Annotated[float, typer.Option(help="Q-net temperature during eval")] = 0.1,
+    d_model: Annotated[int, typer.Option()] = 64,
+    n_heads: Annotated[int, typer.Option()] = 4,
+    n_layers: Annotated[int, typer.Option()] = 2,
+    pool_min: Annotated[int, typer.Option()] = 12,
+    pool_max: Annotated[int, typer.Option()] = 75,
+    seed: Annotated[int, typer.Option()] = 0,
+) -> None:
+    """Evaluate a checkpoint's Q-net win rate vs a uniformly-random opponent."""
+    terminal_model, char_encs_all, event_idxs, mode_idxs, char_meta_table, vocabs = (
+        _load_terminal_model_and_encs(terminal_ckpt, data_dir, terminal_embed_dim, terminal_hidden_dim)
+    )
+    h_terminal = char_encs_all.shape[-1]
+
+    q_net = DraftQNetwork(h_terminal=h_terminal, d_model=d_model, n_heads=n_heads, n_layers=n_layers,
+                          key=jax.random.PRNGKey(0))
+    q_net = eqx.tree_deserialise_leaves(checkpoint / "model.eqx", q_net)
+
+    meta: dict[str, Any] = json.loads((checkpoint / "meta.json").read_text())
+    iteration = meta["iteration"]
+
+    config = DraftConfig(pool_min=pool_min, pool_max=pool_max, temp_min=0.1, temp_max=0.1)
+    rng = np.random.default_rng(seed)
+
+    typer.echo(f"Evaluating ckpt @ iter {iteration} over {n_episodes} episodes (temp={eval_temp})...")
+    results = evaluate_vs_random(
+        q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+        terminal_model, config, rng, n_episodes=n_episodes, eval_temp=eval_temp,
+    )
+    typer.echo(
+        f"  iter={iteration:7d}  "
+        f"win_A={results['win_rate_as_a']:.3f}  "
+        f"win_B={results['win_rate_as_b']:.3f}  "
+        f"combined={results['win_rate_combined']:.3f}"
+    )
+
+
+@app.command()
+def eval_sweep(
+    checkpoints_dir: Annotated[Path, typer.Argument(help="Dir containing ckpt_NNNNNNN subdirs")] = Path("data/draft_model/checkpoints"),
+    terminal_ckpt: Annotated[Path, typer.Option()] = Path("data/model/model.eqx"),
+    data_dir: Annotated[Path, typer.Option()] = _DATA_DIR,
+    terminal_embed_dim: Annotated[int, typer.Option()] = 32,
+    terminal_hidden_dim: Annotated[int, typer.Option()] = 64,
+    n_episodes: Annotated[int, typer.Option(help="Eval episodes per checkpoint")] = 400,
+    eval_temp: Annotated[float, typer.Option()] = 0.1,
+    d_model: Annotated[int, typer.Option()] = 64,
+    n_heads: Annotated[int, typer.Option()] = 4,
+    n_layers: Annotated[int, typer.Option()] = 2,
+    pool_min: Annotated[int, typer.Option()] = 12,
+    pool_max: Annotated[int, typer.Option()] = 75,
+    seed: Annotated[int, typer.Option()] = 0,
+) -> None:
+    """Evaluate all checkpoints in a directory and print a win-rate progression table."""
+    ckpt_dirs = sorted(p for p in checkpoints_dir.iterdir() if p.is_dir() and (p / "model.eqx").exists())
+    if not ckpt_dirs:
+        typer.echo(f"No checkpoints found in {checkpoints_dir}")
+        raise typer.Exit(1)
+
+    terminal_model, char_encs_all, event_idxs, mode_idxs, char_meta_table, vocabs = (
+        _load_terminal_model_and_encs(terminal_ckpt, data_dir, terminal_embed_dim, terminal_hidden_dim)
+    )
+    h_terminal = char_encs_all.shape[-1]
+    config = DraftConfig(pool_min=pool_min, pool_max=pool_max, temp_min=0.1, temp_max=0.1)
+
+    typer.echo(f"{'iter':>8}  {'win_A':>6}  {'win_B':>6}  {'combined':>8}  {'best_loss':>9}")
+    typer.echo("-" * 48)
+
+    for ckpt_dir in tqdm(ckpt_dirs, desc="sweep", unit="ckpt"):
+        meta: dict[str, Any] = json.loads((ckpt_dir / "meta.json").read_text())
+        iteration = meta["iteration"]
+        best_loss = meta["best_loss"]
+
+        q_net = DraftQNetwork(h_terminal=h_terminal, d_model=d_model, n_heads=n_heads, n_layers=n_layers,
+                              key=jax.random.PRNGKey(0))
+        q_net = eqx.tree_deserialise_leaves(ckpt_dir / "model.eqx", q_net)
+
+        rng = np.random.default_rng(seed)
+        results = evaluate_vs_random(
+            q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+            terminal_model, config, rng, n_episodes=n_episodes, eval_temp=eval_temp,
+        )
+        typer.echo(
+            f"{iteration:>8d}  "
+            f"{results['win_rate_as_a']:>6.3f}  "
+            f"{results['win_rate_as_b']:>6.3f}  "
+            f"{results['win_rate_combined']:>8.3f}  "
+            f"{best_loss:>9.4f}"
+        )
 
 
 def main() -> None:
