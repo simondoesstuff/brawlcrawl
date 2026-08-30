@@ -50,10 +50,10 @@ _DARK_STYLE = Style.from_dict({
 
 _PHASES = [
     ("Enemy 1", "enemy"),
-    ("Enemy 2", "enemy"),
-    ("Enemy 3", "enemy"),
     ("Ally  1", "ally"),
     ("Ally  2", "ally"),
+    ("Enemy 2", "enemy"),
+    ("Enemy 3", "enemy"),
 ]
 
 
