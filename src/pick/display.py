@@ -75,17 +75,21 @@ def _cell(
     score_str: str,
     annotation: str = "",
     annotation_slot: int = 0,
+    dimmed: bool = False,
 ) -> Text:
     t = Text()
     t.append(f"{rank:>{_RANK_WIDTH}}. ", style="dim")
-    color = RARITY_COLORS.get(brawler.rarity, "white")
-    t.append(f"{brawler.name:<{_MAX_NAME_LEN}}", style=f"bold {color}")
+    if dimmed:
+        t.append(f"{brawler.name:<{_MAX_NAME_LEN}}", style="dim")
+    else:
+        color = RARITY_COLORS.get(brawler.rarity, "white")
+        t.append(f"{brawler.name:<{_MAX_NAME_LEN}}", style=f"bold {color}")
     if annotation_slot > 0:
         # Annotation sits between name and score; pad with spaces when absent.
-        t.append(annotation if annotation else " " * annotation_slot)
-        t.append(f"{score_str:>{_SCORE_WIDTH}}")
+        t.append(annotation if annotation else " " * annotation_slot, style="dim" if dimmed else "")
+        t.append(f"{score_str:>{_SCORE_WIDTH}}", style="dim" if dimmed else "")
     else:
-        t.append(f" {score_str:>{_SCORE_WIDTH - 1}}")
+        t.append(f" {score_str:>{_SCORE_WIDTH - 1}}", style="dim" if dimmed else "")
     return t
 
 
@@ -96,6 +100,7 @@ def render_brawler_table(
     annotations: dict[int, str] | None = None,
     divider: float | None = None,
     annotation_slot: int = 0,
+    filter_ids: set[int] | None = None,
 ) -> None:
     """Render a ranked list of brawlers in a column-major grid.
 
@@ -137,6 +142,7 @@ def render_brawler_table(
                 idx = row + col * n_rows
                 if idx < n:
                     brawler, score = section[idx]
+                    dimmed = filter_ids is not None and brawler.id not in filter_ids
                     cells.append(
                         _cell(
                             rank_offset + idx + 1,
@@ -144,6 +150,7 @@ def render_brawler_table(
                             score_fmt(score),
                             ann.get(brawler.id, ""),
                             annotation_slot,
+                            dimmed=dimmed,
                         )
                     )
                 else:

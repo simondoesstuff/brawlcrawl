@@ -103,3 +103,15 @@ def test_fuzzy_larry_specific():
     # BULL: B,U,L,L — only one R? No R at all → no match
     result = fuzzy_find("lrl", BRAWLER_NAMES)
     assert result == "LARRY & LAWRIE"
+
+
+def test_fuzzy_slash_returns_none():
+    """'/' normalizes to empty string and must return None — it's used as the filter toggle."""
+    assert fuzzy_find("/", BRAWLER_NAMES) is None
+
+
+def test_fuzzy_filter_partial_names():
+    """Multiple partial names each resolve independently via fuzzy_find."""
+    partials = ["sh", "bro", "col"]
+    resolved = [fuzzy_find(p, BRAWLER_NAMES) for p in partials]
+    assert resolved == ["SHELLY", "BROCK", "COLT"]

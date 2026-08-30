@@ -1,5 +1,6 @@
 """Interactive draft-assist REPL: rank map picks and score 6th picks."""
 
+import os
 import shutil
 from math import ceil
 from pathlib import Path
@@ -70,6 +71,8 @@ class _FuzzyCompleter(Completer):
         if not text.strip():
             return
         norm = _normalize(text)
+        if not norm:
+            return
         matches = [c for c in self._candidates if _subseq_match(norm, _normalize(c))]
         matches.sort(key=lambda c: (len(_normalize(c)), c))
         for c in matches:
@@ -170,6 +173,8 @@ def _run_team_assembly(
     event: EventInfo,
     map_scores: list[tuple[BrawlerInfo, float]],
     ann: dict[int, str] | None = None,
+    filter_ids: set[int] | None = None,
+    filter_enabled: list[bool] | None = None,
 ) -> tuple[list[BrawlerInfo], list[BrawlerInfo]] | None:
     """Interactive team assembly with live grid highlights.
 
@@ -260,10 +265,16 @@ def _run_team_assembly(
                         ann_s  = "fg:ansibrightblack bold bg:#1e1e00"
                         score_s = "bold bg:#1e1e00"
                     else:
+                        is_dim = (
+                            filter_enabled is not None
+                            and filter_enabled[0]
+                            and filter_ids
+                            and brawler.id not in filter_ids
+                        )
                         rank_s = "fg:ansibrightblack"
-                        name_s = rar_style
+                        name_s = "fg:ansibrightblack" if is_dim else rar_style
                         ann_s  = "fg:ansibrightblack"
-                        score_s = ""
+                        score_s = "fg:ansibrightblack" if is_dim else ""
 
                     result.append((rank_s, f"{rank_offset + idx + 1:>{_RANK_WIDTH}}{rank_sep} "))
                     result.append((name_s, f"{brawler.name:<{_MAX_NAME_LEN}}"))
@@ -314,6 +325,10 @@ def _run_team_assembly(
     def _submit(ev):
         text = buf.text.strip()
         if not text:
+            return
+        if text == "/" and filter_enabled is not None and filter_ids:
+            filter_enabled[0] = not filter_enabled[0]
+            buf.reset()
             return
         idx = len(submitted)
         if idx >= len(_PHASES):
@@ -411,6 +426,21 @@ def main(
     render_rarity_legend(console)
     render_annotation_legend(console)
 
+    filter_env = os.environ.get("BRAWL_FILTER", "")
+    filter_names = [p.strip() for p in filter_env.split(",") if p.strip()]
+    filter_ids: set[int] = set()
+    if filter_names:
+        for partial in filter_names:
+            matched = fuzzy_find(partial, ctx.brawler_names)
+            if matched is None:
+                console.print(f"  [red]No brawler matching '{partial}'[/red]")
+            else:
+                filter_ids.add(ctx._brawler_by_name[matched].id)
+        if filter_ids:
+            resolved = [b.name for b in ctx.brawlers if b.id in filter_ids]
+            console.print(f"  Filter: {', '.join(resolved)}\n")
+    filter_enabled: list[bool] = [bool(filter_ids)]
+
     session: PromptSession = PromptSession(style=_DARK_STYLE)
     last_event: EventInfo | None = None
 
@@ -423,6 +453,12 @@ def main(
                 completer=_map_completer(ctx),
                 complete_while_typing=True,
             ).strip()
+
+            if map_raw == "/" and filter_ids:
+                filter_enabled[0] = not filter_enabled[0]
+                state = "on" if filter_enabled[0] else "off"
+                console.print(f"  [dim]Filter {state}[/dim]\n")
+                continue
 
             if not map_raw:
                 if last_event is None:
@@ -441,7 +477,10 @@ def main(
             ov_ann = overview_annotations(ctx, event, map_scores)
 
             # ── Team assembly (with live grid) ─────────────────────────────
-            result = _run_team_assembly(ctx, event, map_scores, ann=ov_ann)
+            result = _run_team_assembly(
+                ctx, event, map_scores, ann=ov_ann,
+                filter_ids=filter_ids, filter_enabled=filter_enabled,
+            )
             if result is None:
                 console.print("  [dim](cancelled)[/dim]\n")
                 continue
@@ -465,6 +504,7 @@ def main(
                 annotations=annotations,
                 divider=WIN_PROB_THRESHOLD,
                 annotation_slot=ANNOTATION_SLOT,
+                filter_ids=filter_ids if filter_enabled[0] else None,
             )
             console.print()
 
