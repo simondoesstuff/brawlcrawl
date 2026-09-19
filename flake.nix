@@ -26,6 +26,7 @@
             just
             jq
             stable.snakemake
+            bun
           ];
         };
       }

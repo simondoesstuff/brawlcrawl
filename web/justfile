@@ -1,0 +1,17 @@
+
+dev:
+	bun dev
+
+install:
+	bun i
+
+# Rebuild the svelte-scoped fork and copy dist into vendor/svelte-scoped
+build-svelte-scoped:
+	cd vendor/unocss && pnpm --filter @unocss/svelte-scoped build
+	rm -rf vendor/svelte-scoped/dist
+	cp -r vendor/unocss/packages-integrations/svelte-scoped/dist vendor/svelte-scoped/dist
+	bun install
+
+alias i := install
+alias d := dev
+alias bss := build-svelte-scoped
