@@ -184,3 +184,17 @@ rule battlelog:
 		"data/battles_{tag}.json"
 	shell:
 		fetch_brawl_stars("players/%23{wildcards.tag}/battlelog", "{output}")
+
+
+rule export_onnx:
+	"""Trace BrawlModel + DraftQNetwork to ONNX and write companion data for web/."""
+	input:
+		terminal_ckpt="data/model/model.eqx",
+		draft_ckpt="data/draft_model/draft_q.eqx",
+	output:
+		"web/static/models/draft_q.onnx",
+		"web/static/models/terminal_pick6.onnx",
+		"web/static/data/char_encs.bin",
+		"web/static/data/manifest.json",
+	shell:
+		"uv run export-onnx --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt}"

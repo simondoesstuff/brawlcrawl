@@ -51,8 +51,7 @@ class MLP(eqx.Module):
                 if key is not None:
                     key, subkey = jax.random.split(key)
                     x = layer(x, key=subkey)
-                else:
-                    x = layer(x, inference=True)
+                # else: inference — dropout is a no-op, skip the call entirely
             else:
                 x = layer(x)
         return x

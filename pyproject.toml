@@ -10,11 +10,13 @@ dependencies = [
   "equinox>=0.13.8",
   "httpx>=0.28.1",
   "jax>=0.11.1",
+  "jax2onnx>=0.16.1",
   "jax[cuda]>=0.11.1 ; sys_platform == 'linux'",
   "jaxtyping>=0.3.11",
   "jpc",
   "matplotlib>=3.11.1",
   "numpy>=2.5.2",
+  "onnx>=1.23.0",
   "optax>=0.2.8",
   "plotext>=6.0.0",
   "prompt-toolkit>=3.0.53",
@@ -34,6 +36,7 @@ crawl = "crawl.main:main"
 geneus = "geneus.train:main"
 pick = "pick.main:entrypoint"
 draft-train = "geneus.draft.train:main"
+export-onnx = "pick.export_onnx:entrypoint"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
@@ -52,5 +55,6 @@ addopts = "--ignore=tests/integration"
 [dependency-groups]
 dev = [
     "basedpyright>=1.39.10",
+    "onnxruntime>=1.30.0",
     "pytest-httpx>=0.36.2",
 ]

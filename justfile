@@ -7,6 +7,9 @@ crawl *args="--help":
 pick *args="":
 	uv run pick {{args}}
 
+export-onnx:
+	snakemake --cores 1 export_onnx
+
 typecheck path='src':
 	uv run basedpyright {{path}}
 
