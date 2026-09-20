@@ -1,14 +1,21 @@
+set positional-arguments := true
+
 _default:
 	@just --list
 
 crawl *args="--help":
-	uv run crawl {{args}}
+	#!/usr/bin/env sh
+	uv run crawl "$@"
 
 pick *args="":
-	uv run pick {{args}}
+	#!/usr/bin/env sh
+	uv run pick "$@"
 
 export-onnx:
 	snakemake --cores 1 export_onnx
+
+web-test: export-onnx
+	cd web && bun test
 
 typecheck path='src':
 	uv run basedpyright {{path}}

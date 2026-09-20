@@ -16,7 +16,9 @@ used as the draft Q-network's input) is not reachable through either model's
 public `__call__` — it comes from `BrawlModel._encode_char`, internal to the
 model — so it is shipped alongside the graphs as a raw float32 binary plus a
 manifest describing shapes and the draft-state constants the client needs to
-rebuild `_build_obs` in JS.
+rebuild `_build_obs` in JS. Brawler/event display metadata and
+winrate/pickrate z-scores (everything else the CLI's `load_context` reads
+from data_dir) go to a separate metadata.json.
 """
 
 import json
@@ -42,7 +44,7 @@ from geneus.draft.env import (
     PICKED_B,
     TURN_SCHEDULE,
 )
-from pick.score import DraftContext, load_context
+from pick.score import BrawlerInfo, DraftContext, load_context
 
 typer_app = typer.Typer(add_completion=False, help="Export ONNX graphs + companion data for the web port.")
 console = Console()
@@ -160,10 +162,12 @@ def validate_terminal_pick6(ctx: DraftContext, onnx_path: Path, n_trials: int = 
 def export_data(ctx: DraftContext, data_out: Path) -> None:
     """Write char_encs_all as a raw float32 binary plus a manifest.
 
-    Kept minimal: only what the draft Q-network needs client-side to
-    reconstruct `_build_obs` (draft-state constants + turn schedule) and to
-    index into char_encs_all by event. Brawler/event/winrate/pickrate
-    metadata is a separate, later step.
+    Kept minimal: only what's needed to actually call the two ONNX graphs —
+    char_encs_all (draft_q's per-event character encodings) and
+    char_meta_table (terminal_pick6's per-character class/range/destruct
+    indices) — plus the draft-state constants needed to rebuild `_build_obs`
+    in JS. Brawler/event/winrate/pickrate display metadata (names, rarities,
+    map names, ...) is a separate, later step.
     """
     data_out.mkdir(parents=True, exist_ok=True)
     char_encs = ctx.char_encs_all.astype(np.float32)
@@ -177,6 +181,7 @@ def export_data(ctx: DraftContext, data_out: Path) -> None:
             "dtype": "float32",
             "shape": list(char_encs.shape),  # [n_events, n_chars, h]
         },
+        "char_meta_table": ctx.char_meta_table.tolist(),  # [n_chars][3]: (class_idx, range_idx, destruct_idx)
         "event_idx_to_row": {str(k): v for k, v in ctx.event_enc_row.items()},
         "draft_state": {
             "AVAILABLE": AVAILABLE,
@@ -214,6 +219,93 @@ def export_data(ctx: DraftContext, data_out: Path) -> None:
     (data_out / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
 
+def export_metadata(ctx: DraftContext, output_path: Path) -> None:
+    """Write brawler/event display metadata + winrate/pickrate z-scores.
+
+    `brawlers[i]` is the brawler at char_idx i, so it zips 1:1 with
+    draft_q's q_values output and manifest.json's char_meta_table. Kept
+    separate from manifest.json, which is only about how to call the ONNX
+    graphs — this is display + `score_map`/`pick_annotations` data, mirroring
+    what `load_context` reads from data_dir for the CLI.
+    """
+    by_char_idx: list[BrawlerInfo | None] = [None] * ctx.n_chars
+    for b in ctx.brawlers:
+        by_char_idx[b.char_idx] = b
+    missing = [i for i, b in enumerate(by_char_idx) if b is None]
+    if missing:
+        raise ValueError(f"char_idx gap in ctx.brawlers (vocab/brawler_class.json mismatch): {missing}")
+
+    metadata = {
+        "brawlers": [
+            {"id": b.id, "name": b.name, "class": b.brawler_class, "rarity": b.rarity, "char_idx": b.char_idx}
+            for b in by_char_idx
+            if b is not None
+        ],
+        "events": [
+            {
+                "id": e.id, "mode": e.mode, "mode_id": e.mode_id,
+                "map_name": e.map_name, "event_idx": e.event_idx, "mode_idx": e.mode_idx,
+            }
+            for e in ctx.events
+        ],
+        "winrates": {str(cid): {str(eid): z for eid, z in ev.items()} for cid, ev in ctx.winrates.items()},
+        "pickrates": {str(cid): {str(eid): z for eid, z in ev.items()} for cid, ev in ctx.pickrates.items()},
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(metadata, indent=2))
+
+
+def export_test_fixture(ctx: DraftContext, output_path: Path, n_cases: int = 3, seed: int = 0) -> None:
+    """Write fixed (input, output) pairs computed from the real JAX models.
+
+    Consumed by the TS test suite (bun test, onnxruntime-web) to check the
+    exported ONNX graphs still produce the same numbers in the browser
+    runtime. Not shipped to web/static — this is a test-only artifact.
+    """
+    rng = np.random.default_rng(seed)
+    row_to_event = {row: event_idx for event_idx, row in ctx.event_enc_row.items()}
+    n_events = ctx.char_encs_all.shape[0]
+
+    draft_q_cases = []
+    for _ in range(n_cases):
+        row = int(rng.integers(0, n_events))
+        char_encs = ctx.char_encs_all[row].astype(np.float32)
+        states = rng.integers(0, N_CHAR_STATES, size=ctx.n_chars).astype(np.int32)
+        turn = int(rng.integers(0, N_DRAFT_TOKENS))
+        q_values = np.array(ctx.q_net(jnp.array(char_encs), jnp.array(states), jnp.array(turn)))
+        draft_q_cases.append({
+            "event_idx": row_to_event[row],
+            "player_char_states": states.tolist(),
+            "turn_token": turn,
+            "q_values": q_values.tolist(),
+        })
+
+    terminal_pick6_cases = []
+    for _ in range(n_cases):
+        event = ctx.events[int(rng.integers(0, len(ctx.events)))]
+        chars = rng.choice(ctx.n_chars, size=6, replace=False)
+        team_a_chars, team_b_chars = chars[:3].astype(np.int32), chars[3:].astype(np.int32)
+        team_a_meta = ctx.char_meta_table[team_a_chars]
+        team_b_meta = ctx.char_meta_table[team_b_chars]
+        logit = float(ctx.terminal_model(
+            jnp.array(event.event_idx), jnp.array(event.mode_idx),
+            jnp.array(team_a_chars), jnp.array(team_a_meta),
+            jnp.array(team_b_chars), jnp.array(team_b_meta),
+        ))
+        terminal_pick6_cases.append({
+            "event_idx": event.event_idx,
+            "mode_idx": event.mode_idx,
+            "team_a_chars": team_a_chars.tolist(),
+            "team_a_meta": team_a_meta.tolist(),
+            "team_b_chars": team_b_chars.tolist(),
+            "team_b_meta": team_b_meta.tolist(),
+            "logit": logit,
+        })
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps({"draft_q": draft_q_cases, "terminal_pick6": terminal_pick6_cases}, indent=2))
+
+
 @typer_app.command()
 def main(
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = Path("data"),
@@ -226,6 +318,8 @@ def main(
     n_layers: Annotated[int, typer.Option(help="DraftQNetwork transformer layers")] = 2,
     models_out: Annotated[Path, typer.Option(help="ONNX output directory")] = Path("web/static/models"),
     data_out: Annotated[Path, typer.Option(help="Companion data output directory")] = Path("web/static/data"),
+    metadata_out: Annotated[Path, typer.Option(help="Brawler/event/winrate/pickrate metadata output path")] = Path("web/static/data/metadata.json"),
+    fixture_out: Annotated[Path, typer.Option(help="TS test fixture output path (not shipped to web/static)")] = Path("web/tests/fixtures/onnx_fixture.json"),
     validate: Annotated[bool, typer.Option(help="Cross-check ONNX outputs against the JAX models")] = True,
 ) -> None:
     console.print(f"Loading terminal model [dim]{terminal_ckpt}[/dim]...")
@@ -252,6 +346,12 @@ def main(
 
     console.print(f"Writing companion data to [dim]{data_out}[/dim]...")
     export_data(ctx, data_out)
+
+    console.print(f"Writing display metadata to [dim]{metadata_out}[/dim]...")
+    export_metadata(ctx, metadata_out)
+
+    console.print(f"Writing TS test fixture to [dim]{fixture_out}[/dim]...")
+    export_test_fixture(ctx, fixture_out)
 
     console.print("[bold green]Done.[/bold green]")
 

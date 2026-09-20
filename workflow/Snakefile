@@ -196,5 +196,7 @@ rule export_onnx:
 		"web/static/models/terminal_pick6.onnx",
 		"web/static/data/char_encs.bin",
 		"web/static/data/manifest.json",
+		"web/static/data/metadata.json",
+		"web/tests/fixtures/onnx_fixture.json",
 	shell:
 		"uv run export-onnx --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt}"
