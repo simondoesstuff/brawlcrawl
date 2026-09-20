@@ -44,7 +44,15 @@ from geneus.draft.env import (
     PICKED_B,
     TURN_SCHEDULE,
 )
-from pick.score import BrawlerInfo, DraftContext, load_context
+from pick.main import (
+    _ban_excluded,
+    _phase_default_filter,
+    _pick_is_ally,
+    _z_score_q,
+    overview_annotations,
+    pick_annotations,
+)
+from pick.score import BrawlerInfo, DraftContext, _build_obs, _pick6_team_split, load_context
 
 typer_app = typer.Typer(add_completion=False, help="Export ONNX graphs + companion data for the web port.")
 console = Console()
@@ -306,6 +314,156 @@ def export_test_fixture(ctx: DraftContext, output_path: Path, n_cases: int = 3, 
     output_path.write_text(json.dumps({"draft_q": draft_q_cases, "terminal_pick6": terminal_pick6_cases}, indent=2))
 
 
+def export_logic_fixture(ctx: DraftContext, output_path: Path, n_cases: int = 6, seed: int = 1) -> None:
+    """Write (input, output) pairs for the pure draft-logic helpers ported to TS.
+
+    Covers `_build_obs`, `_z_score_q`, `_pick6_team_split`, `_ban_excluded`,
+    `_phase_default_filter`, `pick_annotations`, and `overview_annotations` —
+    the port-fidelity landmines that a "does it run" check won't catch
+    (id vs char_idx mixups, filter-as-model-input, phase-dependent z-score
+    pool, ban visibility asymmetry). Consumed by web/src/lib/pick/*.test.ts.
+    """
+    rng = np.random.default_rng(seed)
+    brawlers = ctx.brawlers
+    n = len(brawlers)
+
+    def sample(k: int) -> list[BrawlerInfo]:
+        idxs = rng.choice(n, size=k, replace=False)
+        return [brawlers[i] for i in idxs]
+
+    # ── _build_obs ───────────────────────────────────────────────────────────
+    build_obs_cases = []
+    for _ in range(n_cases):
+        phase = int(rng.integers(0, 12))
+        ally_first = bool(rng.integers(0, 2))
+        ally_bans = sample(3) if phase >= 0 else []
+        enemy_bans = sample(3)
+        n_picks = max(0, min(5, phase - 6)) if phase >= 6 else 0
+        pick_pool = sample(n_picks) if n_picks else []
+        picks = [
+            (_pick_is_ally(i, ally_first), b) for i, b in enumerate(pick_pool)
+        ]
+        use_pool = phase >= 6 and bool(rng.integers(0, 2))
+        local_pool_ids: list[int] | None = None
+        local_pool: set[int] | None = None
+        if use_pool:
+            pool_brawlers = sample(max(10, n // 3))
+            local_pool = {b.id for b in pool_brawlers}
+            local_pool_ids = sorted(local_pool)
+
+        obs, turn_token = _build_obs(
+            ctx.n_chars, ally_bans, enemy_bans, picks, phase, ally_first,
+            local_pool=local_pool, brawlers=ctx.brawlers,
+        )
+        build_obs_cases.append({
+            "phase": phase,
+            "ally_first": ally_first,
+            "ally_ban_char_idxs": [b.char_idx for b in ally_bans],
+            "enemy_ban_char_idxs": [b.char_idx for b in enemy_bans],
+            "picks": [{"is_ally": ia, "char_idx": b.char_idx} for ia, b in picks],
+            "local_pool_ids": local_pool_ids,
+            "obs": obs.tolist(),
+            "turn_token": turn_token,
+        })
+
+    # ── _z_score_q ───────────────────────────────────────────────────────────
+    z_score_cases = []
+    for _ in range(n_cases):
+        q_vals = rng.normal(size=ctx.n_chars).astype(np.float64)
+        k = int(rng.integers(1, n))
+        available_char_idxs = sorted(int(i) for i in rng.choice(n, size=k, replace=False))
+        z = _z_score_q(q_vals, available_char_idxs)
+        z_score_cases.append({
+            "q_values": q_vals.tolist(),
+            "available_char_idxs": available_char_idxs,
+            "z": z.tolist(),
+        })
+    # Degenerate case: empty pool (identity) and constant-value pool (all-zero).
+    q_vals = rng.normal(size=ctx.n_chars).astype(np.float64)
+    z_score_cases.append({
+        "q_values": q_vals.tolist(), "available_char_idxs": [],
+        "z": _z_score_q(q_vals, []).tolist(),
+    })
+    const_q = np.full(ctx.n_chars, 3.5)
+    idxs = list(range(min(10, n)))
+    z_score_cases.append({
+        "q_values": const_q.tolist(), "available_char_idxs": idxs,
+        "z": _z_score_q(const_q, idxs).tolist(),
+    })
+
+    # ── _pick6_team_split ────────────────────────────────────────────────────
+    team_split_cases = []
+    for _ in range(n_cases):
+        ally_first = bool(rng.integers(0, 2))
+        five = sample(5)
+        picks = [(_pick_is_ally(i, ally_first), b) for i, b in enumerate(five)]
+        team_a, team_b_partial = _pick6_team_split(picks)
+        team_split_cases.append({
+            "ally_first": ally_first,
+            "picks": [{"is_ally": ia, "char_idx": b.char_idx} for ia, b in picks],
+            "team_a_char_idxs": [b.char_idx for b in team_a],
+            "team_b_partial_char_idxs": [b.char_idx for b in team_b_partial],
+        })
+
+    # ── _ban_excluded ────────────────────────────────────────────────────────
+    ban_excluded_cases = []
+    for phase in range(12):
+        ally_bans = sample(3)
+        enemy_bans = sample(3)
+        n_picks = max(0, min(5, phase - 6)) if phase >= 6 else 0
+        pick_pool = sample(n_picks) if n_picks else []
+        picks = [(bool(rng.integers(0, 2)), b) for b in pick_pool]
+        excl = _ban_excluded(phase, ally_bans, enemy_bans, picks)
+        ban_excluded_cases.append({
+            "phase": phase,
+            "ally_ban_ids": [b.id for b in ally_bans],
+            "enemy_ban_ids": [b.id for b in enemy_bans],
+            "pick_ids": [{"is_ally": ia, "id": b.id} for ia, b in picks],
+            "excluded_ids": sorted(excl),
+        })
+
+    # ── _phase_default_filter ────────────────────────────────────────────────
+    phase_default_filter_cases = [
+        {"phase": phase, "ally_first": ally_first, "filter_on": _phase_default_filter(phase, ally_first)}
+        for phase in range(12)
+        for ally_first in (True, False)
+    ]
+
+    # ── pick_annotations / overview_annotations ─────────────────────────────
+    n_ann_events = min(4, len(ctx.events))
+    ann_events = [ctx.events[int(i)] for i in rng.choice(len(ctx.events), size=n_ann_events, replace=False)]
+
+    pick_annotation_cases = []
+    overview_annotation_cases = []
+    for event in ann_events:
+        scored = [(b, float(rng.normal())) for b in brawlers]
+        result = pick_annotations(ctx, event, scored)
+        pick_annotation_cases.append({
+            "event_id": event.id,
+            "scores": [{"id": b.id, "score": s} for b, s in scored],
+            "annotations": {str(k): v for k, v in result.items()},
+        })
+
+        map_scored = [(b, float(rng.normal())) for b in brawlers]
+        ov_result = overview_annotations(ctx, event, map_scored)
+        overview_annotation_cases.append({
+            "event_id": event.id,
+            "scores": [{"id": b.id, "score": s} for b, s in map_scored],
+            "annotations": {str(k): v for k, v in ov_result.items()},
+        })
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps({
+        "build_obs": build_obs_cases,
+        "z_score": z_score_cases,
+        "pick6_team_split": team_split_cases,
+        "ban_excluded": ban_excluded_cases,
+        "phase_default_filter": phase_default_filter_cases,
+        "pick_annotations": pick_annotation_cases,
+        "overview_annotations": overview_annotation_cases,
+    }, indent=2))
+
+
 @typer_app.command()
 def main(
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = Path("data"),
@@ -320,6 +478,7 @@ def main(
     data_out: Annotated[Path, typer.Option(help="Companion data output directory")] = Path("web/static/data"),
     metadata_out: Annotated[Path, typer.Option(help="Brawler/event/winrate/pickrate metadata output path")] = Path("web/static/data/metadata.json"),
     fixture_out: Annotated[Path, typer.Option(help="TS test fixture output path (not shipped to web/static)")] = Path("web/tests/fixtures/onnx_fixture.json"),
+    logic_fixture_out: Annotated[Path, typer.Option(help="TS logic-port fixture output path (not shipped to web/static)")] = Path("web/tests/fixtures/logic_fixture.json"),
     validate: Annotated[bool, typer.Option(help="Cross-check ONNX outputs against the JAX models")] = True,
 ) -> None:
     console.print(f"Loading terminal model [dim]{terminal_ckpt}[/dim]...")
@@ -352,6 +511,9 @@ def main(
 
     console.print(f"Writing TS test fixture to [dim]{fixture_out}[/dim]...")
     export_test_fixture(ctx, fixture_out)
+
+    console.print(f"Writing TS logic-port fixture to [dim]{logic_fixture_out}[/dim]...")
+    export_logic_fixture(ctx, logic_fixture_out)
 
     console.print("[bold green]Done.[/bold green]")
 

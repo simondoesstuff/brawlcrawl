@@ -1,84 +1,94 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		createSession,
-		runDraftQ,
-		charEncsRowForEvent,
-		type Manifest,
-		type Metadata
-	} from '$lib/onnx';
+	import { DraftState } from '$lib/pick/draftState.svelte';
+	import MapSelect from '$lib/components/MapSelect.svelte';
+	import CoinFlip from '$lib/components/CoinFlip.svelte';
+	import Draft from '$lib/components/Draft.svelte';
+	import FilterPanel from '$lib/components/FilterPanel.svelte';
+	import Legend from '$lib/components/Legend.svelte';
 
-	// Diagnostic-only smoke test: proves the exported ONNX graphs + data load
-	// and run correctly through onnxruntime-web in an actual browser (bun
-	// test already covers the Node-like path). Real UX comes later.
+	const draft = new DraftState();
+	let filterOpen = $state(false);
 
-	let status = $state('loading...');
-	let error = $state<string | null>(null);
-	let inputNames = $state<string[]>([]);
-	let outputNames = $state<string[]>([]);
-	let eventLabel = $state('');
-	let topPicks = $state<{ name: string; q: number }[]>([]);
-
-	onMount(async () => {
-		try {
-			status = 'fetching manifest + metadata...';
-			const [manifest, metadata]: [Manifest, Metadata] = await Promise.all([
-				fetch('/data/manifest.json').then((r) => r.json()),
-				fetch('/data/metadata.json').then((r) => r.json())
-			]);
-
-			status = 'fetching char_encs.bin...';
-			const charEncsBuf = await fetch('/data/char_encs.bin').then((r) => r.arrayBuffer());
-			const charEncsAll = new Float32Array(charEncsBuf);
-
-			status = 'loading draft_q.onnx...';
-			const session = await createSession('/models/draft_q.onnx');
-			inputNames = [...session.inputNames];
-			outputNames = [...session.outputNames];
-
-			status = 'running inference...';
-			const event = metadata.events[0];
-			eventLabel = `${event.map_name} (${event.mode})`;
-			const charEncsRow = charEncsRowForEvent(charEncsAll, manifest, event.event_idx);
-			const states = new Int32Array(manifest.n_chars).fill(manifest.draft_state.AVAILABLE);
-			const q = await runDraftQ(
-				session,
-				charEncsRow,
-				states,
-				manifest.draft_state.BAN_PHASE,
-				manifest.n_chars,
-				manifest.h_terminal
-			);
-
-			topPicks = Array.from(q)
-				.map((score, i) => ({ name: metadata.brawlers[i].name, q: score }))
-				.sort((a, b) => b.q - a.q)
-				.slice(0, 10);
-
-			status = 'ok';
-		} catch (e) {
-			error = e instanceof Error ? (e.stack ?? e.message) : String(e);
-			status = 'failed';
-		}
+	onMount(() => {
+		void draft.init();
 	});
 </script>
 
-<main style="font-family: monospace; padding: 2rem;">
-	<h1>onnx smoke test</h1>
-	<p>status: {status}</p>
-	{#if error}
-		<pre style="color: red; white-space: pre-wrap;">{error}</pre>
-	{/if}
-	{#if inputNames.length}
-		<p>draft_q.onnx inputs: {inputNames.join(', ')}</p>
-		<p>draft_q.onnx outputs: {outputNames.join(', ')}</p>
-	{/if}
-	{#if topPicks.length}
-		<h2>top ban-phase Q-values — {eventLabel}</h2>
-		<ol>
-			{#each topPicks as p (p.name)}
-				<li>{p.name}: {p.q.toFixed(3)}</li>
-			{/each}
-		</ol>
+<svelte:head>
+	<title>BrawlCrawl — draft assist</title>
+</svelte:head>
+
+<main>
+	<header class="app-header">
+		<h1>BrawlCrawl</h1>
+	</header>
+
+	{#if draft.view === 'loading'}
+		<p class="status">Loading models…</p>
+	{:else if draft.view === 'error'}
+		<p class="status error">{draft.errorMsg}</p>
+	{:else}
+		{#if draft.view === 'map-select'}
+			<MapSelect {draft} />
+		{:else if draft.view === 'coin-flip'}
+			<CoinFlip {draft} />
+		{:else if draft.view === 'drafting'}
+			<Draft {draft} onOpenFilter={() => (filterOpen = true)} />
+		{/if}
+
+		<footer class="app-footer">
+			<Legend />
+		</footer>
+
+		{#if filterOpen}
+			<FilterPanel {draft} onClose={() => (filterOpen = false)} />
+		{/if}
 	{/if}
 </main>
+
+<style>
+	:global(html) {
+		color-scheme: light dark;
+	}
+	:global(body) {
+		background: var(--color-bg);
+		color: var(--color-fg);
+		margin: 0;
+		font-family:
+			system-ui,
+			-apple-system,
+			'Segoe UI',
+			sans-serif;
+	}
+	main {
+		max-width: 64rem;
+		margin: 0 auto;
+		padding: 1rem;
+		padding-bottom: 3rem;
+		box-sizing: border-box;
+		display: flex;
+		flex-direction: column;
+		gap: 1.1rem;
+		min-height: 100dvh;
+	}
+	.app-header h1 {
+		font-size: 1.1rem;
+		margin: 0;
+		opacity: 0.85;
+		letter-spacing: 0.02em;
+	}
+	.status {
+		opacity: 0.7;
+		padding: 2rem 0;
+		text-align: center;
+	}
+	.status.error {
+		color: var(--color-failure);
+	}
+	.app-footer {
+		margin-top: auto;
+		padding-top: 1rem;
+		border-top: 1px solid color-mix(in oklab, var(--color-fg) 10%, transparent);
+	}
+</style>
