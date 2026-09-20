@@ -41,7 +41,7 @@
 			<kbd>/</kbd> then <kbd>Enter</kbd> during a draft to toggle.
 		</p>
 		<input class="search" placeholder="Search…" bind:value={search} />
-		<div class="grid">
+		<div class="owned-grid">
 			{#each shown as name (name)}
 				{@const b = byName.get(name)!}
 				<label class="chip" style:--c={RARITY_COLORS[b.rarity]}>
@@ -123,7 +123,7 @@
 		color: var(--color-fg);
 		font: inherit;
 	}
-	.grid {
+	.owned-grid {
 		overflow-y: auto;
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));

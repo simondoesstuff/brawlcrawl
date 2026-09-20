@@ -64,6 +64,19 @@ export default defineConfig({
 					--color-bg: #00021d;
 					--color-fg: #fff6ec;
 				}
+
+				@media (prefers-color-scheme: dark) {
+					html:not(.light) {
+						--color-primary: #3f7cff;
+						--color-secondary: #37ffeb;
+						--color-tertiary: #74ff83;
+						--color-neutral: #eaf3ff;
+						--color-success: #0bff00;
+						--color-failure: #ff0000;
+						--color-bg: #00021d;
+						--color-fg: #fff6ec;
+					}
+				}
 			`,
     },
   ],

@@ -36,7 +36,7 @@
 	<p class="empty">{emptyMessage}</p>
 {:else}
 	{#if above.length}
-		<div class="grid">
+		<div class="brawler-grid">
 			{#each above as entry (entry.brawler.id)}
 				<BrawlerCard
 					brawler={entry.brawler}
@@ -55,7 +55,7 @@
 		<hr />
 	{/if}
 	{#if below.length}
-		<div class="grid">
+		<div class="brawler-grid">
 			{#each below as entry (entry.brawler.id)}
 				<BrawlerCard
 					brawler={entry.brawler}
@@ -73,7 +73,7 @@
 {/if}
 
 <style>
-	.grid {
+	.brawler-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
 		gap: 0.4em;
