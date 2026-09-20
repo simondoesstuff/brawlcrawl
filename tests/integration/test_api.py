@@ -2,6 +2,7 @@
 API client tests — uses pytest-httpx to mock HTTP; no real network calls.
 Run separately from the main suite: pytest tests/integration
 """
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -137,6 +138,24 @@ class TestGetBattlelog:
         # Missing required battleTime field
         httpx_mock.add_response(json={"items": [{"event": {}, "battle": {}}]})
         with pytest.raises(BrawlApiError):
+            client.get_battlelog("#OWNER")
+
+    def test_retries_on_connection_reset_then_succeeds(
+        self, client: BrawlStarsClient, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("crawl.api.time.sleep", lambda _: None)
+        httpx_mock.add_exception(httpx.ReadError("Connection reset by peer"))
+        httpx_mock.add_response(json=_BATTLELOG_RESPONSE)
+        battles = client.get_battlelog("#OWNER")
+        assert len(battles) == 2
+
+    def test_raises_after_exhausting_retries(
+        self, client: BrawlStarsClient, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr("crawl.api.time.sleep", lambda _: None)
+        for _ in range(4):
+            httpx_mock.add_exception(httpx.ReadError("Connection reset by peer"))
+        with pytest.raises(httpx.ReadError):
             client.get_battlelog("#OWNER")
 
 

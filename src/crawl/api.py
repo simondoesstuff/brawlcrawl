@@ -1,4 +1,5 @@
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import TracebackType
@@ -15,6 +16,8 @@ class TagInaccessibleError(BrawlApiError):
     """Raised on 404/403 — tag exists in battle records but has no accessible battlelog."""
 
 _BASE_URL = "https://api.brawlstars.com/v1"
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_SECONDS = 1.0
 
 
 # --- Raw API shapes (private) ---
@@ -162,9 +165,20 @@ class BrawlStarsClient:
             headers={"Authorization": f"Bearer {token}"},
         )
 
+    def _get(self, path: str) -> httpx.Response:
+        """GET with retries on transient transport errors (e.g. connection resets after the machine sleeps)."""
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return self._client.get(path)
+            except httpx.TransportError:
+                if attempt == _MAX_RETRIES:
+                    raise
+                time.sleep(_RETRY_BACKOFF_SECONDS * 2**attempt)
+        raise AssertionError("unreachable")
+
     def get_battlelog(self, tag: str) -> list[Battle]:
         encoded = tag.lstrip("#")
-        response = self._client.get(f"/players/%23{encoded}/battlelog")
+        response = self._get(f"/players/%23{encoded}/battlelog")
         if response.status_code in (403, 404):
             raise TagInaccessibleError(f"{response.status_code} for tag {tag}")
         _ = response.raise_for_status()
@@ -177,7 +191,7 @@ class BrawlStarsClient:
             ) from exc
 
     def get_brawlers(self) -> list[_RawBrawler]:
-        response = self._client.get("/brawlers")
+        response = self._get("/brawlers")
         _ = response.raise_for_status()
         data = cast(_RawBrawlersResponse, response.json())
         return list(data["items"])

@@ -5,7 +5,7 @@ _default:
 
 crawl *args="--help":
 	#!/usr/bin/env sh
-	uv run crawl "$@"
+	caffeinate -i uv run crawl "$@"
 
 pick *args="":
 	#!/usr/bin/env sh
