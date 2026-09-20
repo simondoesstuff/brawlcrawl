@@ -104,6 +104,20 @@ jax.tree_util.register_pytree_node(
 
 
 def load_vocabs(data_dir: Path = _DATA_DIR) -> Vocabs:
+    """Build index vocabs from the current data files.
+
+    `char_to_idx`/`event_to_idx` are assigned by ascending raw brawler/event id, so a
+    growing roster appends new ids at the tail without shifting existing indices —
+    *only* as long as new ids are always numerically greater than every existing one
+    (true for Brawl Stars' monotonically-increasing id assignment so far). This is
+    what makes `geneus.train`'s `--init-from` vocab growth
+    (`_grow_vocab_filter_spec`) safe: it left-aligns a checkpoint's embedding rows
+    into a larger table, which only lines up correctly if indices never get
+    reassigned. `class_to_idx`/`range_to_idx`/`destruct_to_idx` sort by *string*
+    category value instead — a new category name that sorts alphabetically before an
+    existing one would shift every index after it, silently breaking that same
+    alignment.
+    """
     events: list[dict] = json.loads((data_dir / "events.json").read_text())
     event_to_idx = {e["id"]: i for i, e in enumerate(sorted(events, key=lambda x: x["id"]))}
     mode_to_idx = {m: i for i, m in enumerate(sorted({e["modeId"] for e in events}))}

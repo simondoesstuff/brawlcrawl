@@ -18,8 +18,6 @@ from geneus.model import BrawlModel
 
 app = typer.Typer(add_completion=False)
 
-_MODEL_PATH = Path("data/model/model.eqx")
-
 
 def _to_jax(batch: BattleArrays) -> BattleArrays:
     return BattleArrays(
@@ -42,6 +40,37 @@ def _to_jax_winrates(w: WinrateArrays) -> WinrateArrays:
         char_meta=jnp.asarray(w.char_meta),
         z_scores=jnp.asarray(w.z_scores),
     )
+
+
+def _grow_vocab_filter_spec(f, like_leaf: object) -> object:
+    """`--init-from` deserialisation filter: left-align a checkpoint leaf into a
+    larger `like_leaf`, growing vocab embedding tables when the roster (brawlers,
+    events, ...) has grown since the checkpoint was saved. New rows keep `like_leaf`'s
+    freshly-initialized values; any other shape mismatch still raises.
+
+    This is only correct because `geneus.data.load_vocabs` assigns every vocab index
+    by ascending raw id (its docstring/comments explain why) — growth always appends
+    new ids at the tail, so a checkpoint's rows are always a left-aligned prefix of
+    the current vocab's rows. If that monotonic-id assumption is ever violated (an id
+    reused, entries resorted, a vocab shrinks), row alignment breaks silently instead
+    of raising, since a same-shape leaf is indistinguishable from a correctly-grown one.
+    """
+    loaded = eqx.default_deserialise_filter_spec(f, like_leaf)
+    if (
+        isinstance(loaded, jax.Array)
+        and isinstance(like_leaf, jax.Array)
+        and loaded.ndim >= 1
+        and loaded.shape != like_leaf.shape
+    ):
+        if loaded.shape[1:] != like_leaf.shape[1:] or loaded.shape[0] > like_leaf.shape[0]:
+            raise RuntimeError(
+                f"--init-from checkpoint leaf shape {loaded.shape} is not a "
+                f"prefix-compatible vocab growth of the target shape {like_leaf.shape} "
+                "(trailing dims must match and the checkpoint must not be larger)."
+            )
+        typer.echo(f"  extending vocab embedding {loaded.shape} -> {like_leaf.shape} (new rows randomly initialized)")
+        return like_leaf.at[: loaded.shape[0]].set(loaded)
+    return loaded
 
 
 def bce_loss(
@@ -247,23 +276,33 @@ def _save_curves(
 
 @app.command()
 def train(
+    *,
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = Path("data"),
-    out: Annotated[Path, typer.Option(help="Best-model output path")] = _MODEL_PATH,
-    epochs: Annotated[int, typer.Option(help="Training epochs")] = 50,
+    battles_file: Annotated[str, typer.Option(help="Crawl battles JSON filename, relative to data_dir")],
+    out: Annotated[Path, typer.Option(help="Best-model output path, relative to data_dir (or absolute)")],
+    init_from: Annotated[
+        Path | None,
+        typer.Option(help="Warm-start model weights from an existing .eqx checkpoint, relative to data_dir (or absolute), before training on --battles-file. Optimizer/scheduler state is always reinitialized, not restored."),
+    ] = None,
+    epochs: Annotated[int, typer.Option(help="Training epochs")] = 400,
     batch_size: Annotated[int, typer.Option(help="Batch size")] = 512,
     lr: Annotated[float, typer.Option(help="Peak learning rate")] = 1e-3,
     weight_decay: Annotated[float, typer.Option(help="AdamW weight decay")] = 1e-4,
-    embed_dim: Annotated[int, typer.Option(help="Embedding dimension")] = 16,
+    embed_dim: Annotated[int, typer.Option(help="Embedding dimension")] = 32,
     hidden_dim: Annotated[int, typer.Option(help="MLP hidden dimension")] = 64,
     dropout_p: Annotated[float, typer.Option(help="Dropout probability (char + MLP)")] = 0.3,
-    val_frac: Annotated[float, typer.Option(help="Validation fraction")] = 0.1,
-    checkpoint_every: Annotated[int, typer.Option(help="Periodic checkpoint interval in epochs (0=off)")] = 5,
+    val_frac: Annotated[float, typer.Option(help="Validation fraction")] = 0.15,
+    checkpoint_every: Annotated[int, typer.Option(help="Periodic checkpoint interval in epochs (0=off)")] = 20,
     winrate_weight: Annotated[float, typer.Option(help="Weight of the per-char winrate auxiliary loss")] = 0.1,
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
-    typer.echo("Loading data...")
+    out = data_dir / out
+    if init_from is not None:
+        init_from = data_dir / init_from
+
+    typer.echo(f"Loading data ({battles_file})...")
     vocabs = load_vocabs(data_dir)
-    all_battles = load_battles(data_dir, vocabs=vocabs)
+    all_battles = load_battles(data_dir, vocabs=vocabs, battles_file=battles_file)
     train_data, val_data = train_val_split(all_battles, val_frac=val_frac, seed=seed)
     val_jax = _to_jax(val_data)
     winrate_data = load_winrates(data_dir, vocabs=vocabs)
@@ -287,6 +326,9 @@ def train(
         dropout_p=dropout_p,
         key=key,
     )
+    if init_from is not None:
+        typer.echo(f"Warm-starting weights from {init_from} (optimizer/scheduler reset)...")
+        model = eqx.tree_deserialise_leaves(init_from, model, filter_spec=_grow_vocab_filter_spec)
     n_params = sum(x.size for x in jax.tree.leaves(eqx.filter(model, eqx.is_array)))
     typer.echo(f"  {n_params:,} parameters")
 

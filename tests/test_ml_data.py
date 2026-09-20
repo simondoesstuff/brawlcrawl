@@ -40,7 +40,7 @@ class TestVocabs:
     def test_known_vocab_sizes(self, vocabs: Vocabs) -> None:
         assert vocabs.n_events == 31
         assert vocabs.n_modes == 6
-        assert vocabs.n_chars == 106
+        assert vocabs.n_chars == 108
         assert vocabs.n_classes == 7
         assert vocabs.n_ranges == 4
         assert vocabs.n_destructs == 4

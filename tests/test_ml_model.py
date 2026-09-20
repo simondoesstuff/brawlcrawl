@@ -170,6 +170,22 @@ class TestBrawlModel:
         assert loss.shape == ()
         assert jnp.isfinite(loss)
 
+    def test_warm_start_from_checkpoint(
+        self, model: BrawlModel, sample_inputs: tuple, tmp_path
+    ) -> None:
+        """eqx.tree_deserialise_leaves round-trip — the training-continuation warm-start path."""
+        ckpt = tmp_path / "model.eqx"
+        eqx.tree_serialise_leaves(ckpt, model)
+
+        skeleton = BrawlModel(**VOCAB, key=jax.random.PRNGKey(999))
+        restored = eqx.tree_deserialise_leaves(ckpt, skeleton)
+
+        logit_orig = model(*sample_inputs)
+        logit_restored = restored(*sample_inputs)
+        logit_skeleton = skeleton(*sample_inputs)
+        np.testing.assert_allclose(float(logit_orig), float(logit_restored), atol=1e-6)
+        assert not np.isclose(float(logit_orig), float(logit_skeleton), atol=1e-6)
+
     def test_vmap_with_keys(self, model: BrawlModel) -> None:
         B = 4
         event_idx = jnp.zeros(B, dtype=jnp.int32)
