@@ -186,6 +186,23 @@ rule battlelog:
 		fetch_brawl_stars("players/%23{wildcards.tag}/battlelog", "{output}")
 
 
+rule tier_lists:
+	"""Monte Carlo per-map first-pick tier lists, scored by the terminal BrawlModel."""
+	input:
+		terminal_ckpt="data/model/model.eqx",
+		draft_ckpt="data/draft_model/draft_q.eqx",
+		brawler_class="data/brawler_class.json",
+		brawler_range="data/brawler_effective_range.json",
+		brawler_destruction="data/brawler_destruction.json",
+		events="data/events.json",
+		winrates="data/winrates_leg1_20260827.json",
+		pickrates="data/pickrates_leg1_20260827.json",
+	output:
+		"data/tier_lists.json"
+	shell:
+		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --output {output}"
+
+
 rule export_onnx:
 	"""Trace BrawlModel + DraftQNetwork to ONNX and write companion data for web/."""
 	input:

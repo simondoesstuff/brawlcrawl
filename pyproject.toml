@@ -37,6 +37,7 @@ geneus = "geneus.train:main"
 pick = "pick.main:entrypoint"
 draft-train = "geneus.draft.train:main"
 export-onnx = "pick.export_onnx:entrypoint"
+tier-list = "pick.tier_list:entrypoint"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
