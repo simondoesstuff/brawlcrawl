@@ -104,5 +104,7 @@
   {"id": 16000105, "name": "STARR NOVA", "destruction": "NONE"},
   {"id": 16000106, "name": "BOLT", "destruction": "MINOR"},
   {"id": 16000107, "name": "NORI", "destruction": "NONE"},
-  {"id": 16000108, "name": "WENDY", "destruction": "NONE"}
+  {"id": 16000108, "name": "WENDY", "destruction": "NONE"},
+  {"id": 16000109, "name": "COSMO", "destruction": "NONE"},
+  {"id": 16000110, "name": "VINCE", "destruction": "NONE"}
 ]

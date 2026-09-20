@@ -104,5 +104,7 @@
   {"id": 16000105, "name": "STARR NOVA", "range": "MEDIUM"},
   {"id": 16000106, "name": "BOLT", "range": "CLOSE"},
   {"id": 16000107, "name": "NORI", "range": "MEDIUM"},
-  {"id": 16000108, "name": "WENDY", "range": "FAR"}
+  {"id": 16000108, "name": "WENDY", "range": "FAR"},
+  {"id": 16000109, "name": "COSMO", "range": "FAR"},
+  {"id": 16000110, "name": "VINCE", "range": "FAR"}
 ]
