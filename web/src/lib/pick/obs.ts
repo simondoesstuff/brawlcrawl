@@ -26,9 +26,17 @@ export function buildObs(
 	picks: PickCharEntry[],
 	phase: number,
 	allyFirst: boolean,
-	opts: { localPoolIds?: Set<number> | null; brawlers?: BrawlerRef[] } = {}
+	opts: { localPoolIds?: ReadonlySet<number> | null; brawlers?: BrawlerRef[] } = {}
 ): { obs: Int32Array; turnToken: number } {
-	const { AVAILABLE, GLOBALLY_BANNED, PICKED_A, PICKED_B, LOCALLY_BANNED, BAN_PHASE, TURN_SCHEDULE } = draftState;
+	const {
+		AVAILABLE,
+		GLOBALLY_BANNED,
+		PICKED_A,
+		PICKED_B,
+		LOCALLY_BANNED,
+		BAN_PHASE,
+		TURN_SCHEDULE
+	} = draftState;
 	const obs = new Int32Array(nChars); // defaults to AVAILABLE (0)
 	let turnToken: number;
 
@@ -40,7 +48,8 @@ export function buildObs(
 		turnToken = BAN_PHASE;
 	} else {
 		for (const ci of [...allyBanCharIdxs, ...enemyBanCharIdxs]) obs[ci] = GLOBALLY_BANNED;
-		for (const { isAlly, charIdx } of picks) obs[charIdx] = isAlly === allyFirst ? PICKED_A : PICKED_B;
+		for (const { isAlly, charIdx } of picks)
+			obs[charIdx] = isAlly === allyFirst ? PICKED_A : PICKED_B;
 		const pickIdx = phase - 6;
 		turnToken = TURN_SCHEDULE[6 + pickIdx][0];
 	}
