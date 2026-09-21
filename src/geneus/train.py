@@ -176,23 +176,15 @@ def _iter_batches(
     for start in range(0, len(arrays), batch_size):
         idx = perm[start : start + batch_size]
         n = len(idx)
-        # Randomly flip which team is "A" — exact since model is anti-symmetric.
-        flip = rng.integers(0, 2, size=n).astype(bool)
-        ta_c = arrays.team_a_chars[idx]
-        ta_m = arrays.team_a_meta[idx]
-        tb_c = arrays.team_b_chars[idx]
-        tb_m = arrays.team_b_meta[idx]
-        a_wins = arrays.a_wins[idx]
-        totals = arrays.totals[idx]
         battle_batch = _to_jax(BattleArrays(
             event_idx=arrays.event_idx[idx],
             mode_idx=arrays.mode_idx[idx],
-            team_a_chars=np.where(flip[:, None], tb_c, ta_c),
-            team_a_meta=np.where(flip[:, None, None], tb_m, ta_m),
-            team_b_chars=np.where(flip[:, None], ta_c, tb_c),
-            team_b_meta=np.where(flip[:, None, None], ta_m, tb_m),
-            a_wins=np.where(flip, totals - a_wins, a_wins),
-            totals=totals,
+            team_a_chars=arrays.team_a_chars[idx],
+            team_a_meta=arrays.team_a_meta[idx],
+            team_b_chars=arrays.team_b_chars[idx],
+            team_b_meta=arrays.team_b_meta[idx],
+            a_wins=arrays.a_wins[idx],
+            totals=arrays.totals[idx],
         ))
         # Sample a winrate mini-batch with replacement (winrate data << steps × batch_size).
         wr_idx = rng.integers(0, len(winrates.event_idx), size=n)

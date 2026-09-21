@@ -175,10 +175,13 @@ class BrawlModel(eqx.Module):
     ) -> Float[Array, ""]:
         map_emb = self.embed_map_id(event_idx) + self.embed_map_mode(mode_idx)
         if key is not None:
-            k_a, k_b, k_s1, k_s2 = jax.random.split(key, 4)
+            k_a, k_b, k_s = jax.random.split(key, 3)
             t_a = self._encode_team(team_a_chars, team_a_meta, map_emb, key=k_a)
             t_b = self._encode_team(team_b_chars, team_b_meta, map_emb, key=k_b)
-            return self._score(t_a, t_b, map_emb, key=k_s1) - self._score(t_b, t_a, map_emb, key=k_s2)
+            # Same dropout key for both score calls: keeps f(A,B) = -f(B,A) exact
+            # during training, not just at inference (dropout in mlp_team would
+            # otherwise break antisymmetry per-step).
+            return self._score(t_a, t_b, map_emb, key=k_s) - self._score(t_b, t_a, map_emb, key=k_s)
         else:
             t_a = self._encode_team(team_a_chars, team_a_meta, map_emb)
             t_b = self._encode_team(team_b_chars, team_b_meta, map_emb)

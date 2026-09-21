@@ -86,6 +86,28 @@ class TestBrawlModel:
         logit_ba = model(event_idx, mode_idx, tb_c, tb_m, ta_c, ta_m)
         np.testing.assert_allclose(float(logit_ab), -float(logit_ba), atol=1e-5)
 
+    def test_anti_symmetry_vanishes_on_diagonal_with_dropout(
+        self, model: BrawlModel, sample_inputs: tuple, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A true antisymmetric function must vanish when both team encodings are
+        identical. This only holds under active training-time dropout if the two
+        `_score` calls inside `__call__` share one dropout mask — independent masks
+        would score the (equal) encodings differently, making the difference nonzero.
+        `_encode_team` is patched to return a fixed vector regardless of input/key,
+        isolating this from the (expected, unrelated) dropout asymmetry between the
+        two teams' own encodings."""
+        event_idx, mode_idx, ta_c, ta_m, tb_c, tb_m = sample_inputs
+        map_emb = model.embed_map_id(event_idx) + model.embed_map_mode(mode_idx)
+        fixed_team = model._encode_team(ta_c, ta_m, map_emb)  # deterministic, no key
+
+        monkeypatch.setattr(
+            BrawlModel,
+            "_encode_team",
+            lambda self, char_idxs, meta_idxs, map_emb, *, key=None: fixed_team,
+        )
+        logit = model(event_idx, mode_idx, ta_c, ta_m, tb_c, tb_m, key=jax.random.PRNGKey(1))
+        assert float(logit) == pytest.approx(0.0, abs=1e-6)
+
     def test_permutation_invariance_team_a(self, model: BrawlModel, sample_inputs: tuple) -> None:
         event_idx, mode_idx, ta_c, ta_m, tb_c, tb_m = sample_inputs
         # Permute brawlers within team A
