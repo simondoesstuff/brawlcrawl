@@ -18,6 +18,11 @@ from geneus.model import BrawlModel
 
 app = typer.Typer(add_completion=False)
 
+_DATA_DIR = Path("data")
+_BATTLES_FILE = _DATA_DIR / "crawl_leg1_20260827.json"
+_MODEL_OUT_DIR = _DATA_DIR / "model"
+_MODEL_FILENAME = "model.eqx"
+
 
 def _to_jax(batch: BattleArrays) -> BattleArrays:
     return BattleArrays(
@@ -269,12 +274,16 @@ def _save_curves(
 @app.command()
 def train(
     *,
-    data_dir: Annotated[Path, typer.Option(help="Data directory")] = Path("data"),
-    battles_file: Annotated[str, typer.Option(help="Crawl battles JSON filename, relative to data_dir")],
-    out: Annotated[Path, typer.Option(help="Best-model output path, relative to data_dir (or absolute)")],
+    data_dir: Annotated[Path, typer.Option(help="Data directory (vocab/reference files: events.json, brawler_class.json, etc.)")] = _DATA_DIR,
+    battles_file: Annotated[Path, typer.Option(help="Path to the crawl battles JSON file")] = _BATTLES_FILE,
+    winrates_file: Annotated[
+        Path | None,
+        typer.Option(help="Path to the per-char winrate JSON file (default: battles_file with its 'crawl_' prefix swapped for 'winrates_')"),
+    ] = None,
+    out: Annotated[Path, typer.Option(help="Output directory for the best model, checkpoints, and training curves")] = _MODEL_OUT_DIR,
     init_from: Annotated[
         Path | None,
-        typer.Option(help="Warm-start model weights from an existing .eqx checkpoint, relative to data_dir (or absolute), before training on --battles-file. Optimizer/scheduler state is always reinitialized, not restored."),
+        typer.Option(help="Warm-start model weights from an existing .eqx checkpoint before training on --battles-file. Optimizer/scheduler state is always reinitialized, not restored."),
     ] = None,
     epochs: Annotated[int, typer.Option(help="Training epochs")] = 400,
     batch_size: Annotated[int, typer.Option(help="Batch size")] = 512,
@@ -288,16 +297,15 @@ def train(
     winrate_weight: Annotated[float, typer.Option(help="Weight of the per-char winrate auxiliary loss")] = 0.1,
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
-    out = data_dir / out
-    if init_from is not None:
-        init_from = data_dir / init_from
+    if winrates_file is None:
+        winrates_file = battles_file.with_name(battles_file.name.replace("crawl_", "winrates_", 1))
 
     typer.echo(f"Loading data ({battles_file})...")
     vocabs = load_vocabs(data_dir)
     all_battles = load_battles(data_dir, vocabs=vocabs, battles_file=battles_file)
     train_data, val_data = train_val_split(all_battles, val_frac=val_frac, seed=seed)
     val_jax = _to_jax(val_data)
-    winrate_data = load_winrates(data_dir, vocabs=vocabs)
+    winrate_data = load_winrates(data_dir, vocabs=vocabs, winrates_file=winrates_file)
     winrate_jax = _to_jax_winrates(winrate_data)
     typer.echo(
         f"  {len(train_data)} train / {len(val_data)} val compositions  "
@@ -338,7 +346,8 @@ def train(
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
     step = make_step_fn(optimizer, winrate_weight=winrate_weight)
 
-    ckpt_dir = out.parent / "checkpoints"
+    model_path = out / _MODEL_FILENAME
+    ckpt_dir = out / "checkpoints"
     if checkpoint_every > 0:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -371,15 +380,15 @@ def train(
             val_acc = float(accuracy(model, val_jax))
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                out.parent.mkdir(parents=True, exist_ok=True)
-                eqx.tree_serialise_leaves(out, model)
+                out.mkdir(parents=True, exist_ok=True)
+                eqx.tree_serialise_leaves(model_path, model)
                 marker = " ✓"
             log_suffix = f"  val={val_loss:.4f}  acc={val_acc:.3f}  wr={wr_loss:.4f}{marker}"
         else:
             val_loss = float("nan")
             val_acc = float("nan")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            eqx.tree_serialise_leaves(out, model)
+            out.mkdir(parents=True, exist_ok=True)
+            eqx.tree_serialise_leaves(model_path, model)
             log_suffix = f"  wr={wr_loss:.4f}"
 
         if checkpoint_every > 0 and epoch % checkpoint_every == 0:
@@ -395,12 +404,12 @@ def train(
 
         _render_dashboard(epoch_lines, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist, winrate_loss_hist)
 
-    curves_path = out.parent / "train_curves.png"
+    curves_path = out / "train_curves.png"
     _save_curves(curves_path, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist, winrate_loss_hist)
     if has_val:
-        print(f"\nBest val loss: {best_val_loss:.4f}  → {out}")
+        print(f"\nBest val loss: {best_val_loss:.4f}  → {model_path}")
     else:
-        print(f"\nFinal train loss: {mean_train:.4f}  → {out}")
+        print(f"\nFinal train loss: {mean_train:.4f}  → {model_path}")
     print(f"Training curves  → {curves_path}")
 
 

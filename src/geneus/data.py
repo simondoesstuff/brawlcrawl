@@ -170,7 +170,7 @@ def load_battles(
     data_dir: Path = _DATA_DIR,
     *,
     vocabs: Vocabs | None = None,
-    battles_file: str = "crawl_leg1_20260827.json",
+    battles_file: Path = _DATA_DIR / "crawl_leg1_20260827.json",
 ) -> BattleArrays:
     if vocabs is None:
         vocabs = load_vocabs(data_dir)
@@ -180,7 +180,7 @@ def load_battles(
     events: list[dict] = json.loads((data_dir / "events.json").read_text())
     event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
 
-    raw: dict = json.loads((data_dir / battles_file).read_text())
+    raw: dict = json.loads(battles_file.read_text())
     battles: list[dict] = [b for b in raw["stats"] if b["event_id"] in vocabs.event_to_idx]
 
     for b in battles:
@@ -232,7 +232,7 @@ def load_winrates(
     data_dir: Path = _DATA_DIR,
     *,
     vocabs: Vocabs | None = None,
-    winrates_file: str = _WINRATES_FILE,
+    winrates_file: Path = _DATA_DIR / _WINRATES_FILE,
 ) -> WinrateArrays:
     if vocabs is None:
         vocabs = load_vocabs(data_dir)
@@ -242,7 +242,7 @@ def load_winrates(
     events: list[dict] = json.loads((data_dir / "events.json").read_text())
     event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
 
-    raw: list[dict] = json.loads((data_dir / winrates_file).read_text())
+    raw: list[dict] = json.loads(winrates_file.read_text())
     entries = [
         e for e in raw
         if e["event_id"] in vocabs.event_to_idx and e["char_id"] in vocabs.char_to_idx
