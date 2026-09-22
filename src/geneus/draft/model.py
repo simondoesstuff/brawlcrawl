@@ -46,7 +46,7 @@ class DraftQNetwork(eqx.Module):
       positive → current team expected to win
       negative → current team expected to lose
 
-    The draft turn token encodes which phase and pick position this is.
+    The draft turn token encodes which phase, team, and pick position this is.
     The character state embeddings encode the observable draft history.
     Together they give the transformer full context to distinguish all 12 turns.
     """

@@ -6,7 +6,12 @@ phase; the opposing team's bans are hidden until pick 1, matching the simultaneo
 ban mechanic. Cross-team ban overlap is allowed: both teams can select the same
 character, resulting in one globally banned character at pick 1.
 
-Team A is defined as the first-picking team (no coin-flip in the model).
+Team A is defined as the first-picking team; the pick order (A BB AA B) is
+constant. There is no coin-flip in the model itself — but each acting player
+always knows which team they are (they know if they're about to get the first
+pick or the sixth), so the ban-phase turn token is split by team identity
+rather than collapsed into a single shared token (see BAN_PHASE_FIRST_PICK /
+BAN_PHASE_SIXTH_PICK below).
 """
 
 from __future__ import annotations
@@ -29,15 +34,21 @@ N_CHAR_STATES = 5
 # ---------------------------------------------------------------------------
 # Draft turn tokens  (embedding indices for DraftQNetwork)
 # ---------------------------------------------------------------------------
-BAN_PHASE = 0   # shared token for all 6 ban turns
-PICK_1 = 1      # Team A, seat 0
-PICK_2 = 2      # Team B, seat 0
-PICK_3 = 3      # Team B, seat 1
-PICK_4 = 4      # Team A, seat 1
-PICK_5 = 5      # Team A, seat 2
-PICK_6 = 6      # Team B, seat 2 (last pick)
+# Ban phase gets two tokens, not one: the acting player always knows which
+# team they are, and team identity during bans is not otherwise observable
+# (the character-state observation only reveals the acting player's own
+# bans, never which team those bans belong to). Collapsing both teams' ban
+# turns into a single token would hide that knowledge from the network.
+BAN_PHASE_FIRST_PICK = 0   # Team A bans — this team gets the first pick
+BAN_PHASE_SIXTH_PICK = 1   # Team B bans — this team gets the sixth (last) pick
+PICK_1 = 2      # Team A, seat 0
+PICK_2 = 3      # Team B, seat 0
+PICK_3 = 4      # Team B, seat 1
+PICK_4 = 5      # Team A, seat 1
+PICK_5 = 6      # Team A, seat 2
+PICK_6 = 7      # Team B, seat 2 (last pick)
 
-N_DRAFT_TOKENS = 7
+N_DRAFT_TOKENS = 8
 
 # ---------------------------------------------------------------------------
 # Full 12-turn schedule: (turn_token, team, seat_within_team)
@@ -46,12 +57,12 @@ N_DRAFT_TOKENS = 7
 # Picks: A BB AA B  (team A = first-picking team by convention)
 # ---------------------------------------------------------------------------
 TURN_SCHEDULE: list[tuple[int, str, int]] = [
-    (BAN_PHASE, "A", 0),
-    (BAN_PHASE, "A", 1),
-    (BAN_PHASE, "A", 2),
-    (BAN_PHASE, "B", 0),
-    (BAN_PHASE, "B", 1),
-    (BAN_PHASE, "B", 2),
+    (BAN_PHASE_FIRST_PICK, "A", 0),
+    (BAN_PHASE_FIRST_PICK, "A", 1),
+    (BAN_PHASE_FIRST_PICK, "A", 2),
+    (BAN_PHASE_SIXTH_PICK, "B", 0),
+    (BAN_PHASE_SIXTH_PICK, "B", 1),
+    (BAN_PHASE_SIXTH_PICK, "B", 2),
     (PICK_1, "A", 0),
     (PICK_2, "B", 0),
     (PICK_3, "B", 1),
@@ -108,6 +119,12 @@ class DraftConfig:
     pool_max: int = 40    # maximum chars in a player's local pool
     temp_min: float = 0.05
     temp_max: float = 2.0
+    # Probability an episode skips the ban phase entirely (no chars banned,
+    # so PICK_1 sees every char as AVAILABLE or LOCALLY_BANNED). Trains the
+    # network on this out-of-distribution-but-real state: nothing in the
+    # ordinary ban sub-MDP ever produces zero bans, since each ban turn must
+    # select a char, but the CLI/web tool can be pointed at a no-ban draft.
+    skip_ban_prob: float = 0.05
 
 
 # ---------------------------------------------------------------------------

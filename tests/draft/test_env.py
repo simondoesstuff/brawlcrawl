@@ -6,7 +6,8 @@ import pytest
 from geneus.draft.env import (
     AVAILABLE,
     BELLMAN_SIGNS,
-    BAN_PHASE,
+    BAN_PHASE_FIRST_PICK,
+    BAN_PHASE_SIXTH_PICK,
     GLOBALLY_BANNED,
     LOCALLY_BANNED,
     PICKED_A,
@@ -62,9 +63,29 @@ def test_schedule_length():
 
 
 def test_ban_phase_tokens():
-    for turn_idx in range(6):
-        token, _, _ = TURN_SCHEDULE[turn_idx]
-        assert token == BAN_PHASE, f"Turn {turn_idx} should have BAN_PHASE token"
+    for turn_idx in range(3):
+        token, team, _ = TURN_SCHEDULE[turn_idx]
+        assert team == "A"
+        assert token == BAN_PHASE_FIRST_PICK, (
+            f"Turn {turn_idx} (team A ban) should have BAN_PHASE_FIRST_PICK token"
+        )
+    for turn_idx in range(3, 6):
+        token, team, _ = TURN_SCHEDULE[turn_idx]
+        assert team == "B"
+        assert token == BAN_PHASE_SIXTH_PICK, (
+            f"Turn {turn_idx} (team B ban) should have BAN_PHASE_SIXTH_PICK token"
+        )
+
+
+def test_turn_token_uniquely_determines_team():
+    """The turn token must fully determine the acting team — this is exactly the
+    invariant the ban-phase split establishes (previously both teams' ban turns
+    shared BAN_PHASE, hiding team identity from the network)."""
+    token_to_teams: dict[int, set[str]] = {}
+    for token, team, _ in TURN_SCHEDULE:
+        token_to_teams.setdefault(token, set()).add(team)
+    for token, teams in token_to_teams.items():
+        assert len(teams) == 1, f"Token {token} maps to multiple teams: {teams}"
 
 
 def test_pick_tokens():

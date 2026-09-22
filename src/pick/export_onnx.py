@@ -35,7 +35,8 @@ from rich.console import Console
 
 from geneus.draft.env import (
     AVAILABLE,
-    BAN_PHASE,
+    BAN_PHASE_FIRST_PICK,
+    BAN_PHASE_SIXTH_PICK,
     GLOBALLY_BANNED,
     LOCALLY_BANNED,
     N_CHAR_STATES,
@@ -198,7 +199,8 @@ def export_data(ctx: DraftContext, data_out: Path) -> None:
             "PICKED_A": PICKED_A,
             "PICKED_B": PICKED_B,
             "N_CHAR_STATES": N_CHAR_STATES,
-            "BAN_PHASE": BAN_PHASE,
+            "BAN_PHASE_FIRST_PICK": BAN_PHASE_FIRST_PICK,
+            "BAN_PHASE_SIXTH_PICK": BAN_PHASE_SIXTH_PICK,
             "N_DRAFT_TOKENS": N_DRAFT_TOKENS,
             "TURN_SCHEDULE": [list(t) for t in TURN_SCHEDULE],
         },

@@ -12,7 +12,8 @@ import numpy as np
 from geneus.data import load_vocabs
 from geneus.draft.env import (
     AVAILABLE,
-    BAN_PHASE,
+    BAN_PHASE_FIRST_PICK,
+    BAN_PHASE_SIXTH_PICK,
     GLOBALLY_BANNED,
     LOCALLY_BANNED,
     PICKED_A,
@@ -104,17 +105,24 @@ def _build_obs(
 
     local_pool: set of brawler IDs the acting player can select.  Brawlers not in
     the pool that are still AVAILABLE are marked LOCALLY_BANNED.
+
+    The ban-phase turn token depends on which model team (A or B) is acting:
+    the model's team A always gets the first pick, team B the sixth (last).
+    ally_first says whether the ally maps to model team A or B, so it also
+    determines which team is acting during each ban sub-phase.
     """
     obs = np.zeros(n_chars, dtype=np.int32)
 
     if phase < 3:
         for b in ally_bans:
             obs[b.char_idx] = GLOBALLY_BANNED
-        turn_token = BAN_PHASE
+        acting_is_team_a = ally_first
+        turn_token = BAN_PHASE_FIRST_PICK if acting_is_team_a else BAN_PHASE_SIXTH_PICK
     elif phase < 6:
         for b in enemy_bans:
             obs[b.char_idx] = GLOBALLY_BANNED
-        turn_token = BAN_PHASE
+        acting_is_team_a = not ally_first
+        turn_token = BAN_PHASE_FIRST_PICK if acting_is_team_a else BAN_PHASE_SIXTH_PICK
     else:
         for b in ally_bans + enemy_bans:
             obs[b.char_idx] = GLOBALLY_BANNED

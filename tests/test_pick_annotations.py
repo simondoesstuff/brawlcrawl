@@ -14,7 +14,15 @@ from pick.constants import (
 from pick.display import render_brawler_table
 from pick.main import _ban_excluded, _phase_default_filter, _z_score_q, overview_annotations, pick_annotations
 from pick.score import BrawlerInfo, DraftContext, EventInfo, _build_obs, _pick6_team_split
-from geneus.draft.env import AVAILABLE, GLOBALLY_BANNED, LOCALLY_BANNED, PICKED_A, PICKED_B
+from geneus.draft.env import (
+    AVAILABLE,
+    BAN_PHASE_FIRST_PICK,
+    BAN_PHASE_SIXTH_PICK,
+    GLOBALLY_BANNED,
+    LOCALLY_BANNED,
+    PICKED_A,
+    PICKED_B,
+)
 
 
 # ── minimal stubs ─────────────────────────────────────────────────────────────
@@ -298,6 +306,27 @@ def test_build_obs_ban_phase_ally():
     assert obs[0] == GLOBALLY_BANNED
     assert obs[1] == GLOBALLY_BANNED
     assert obs[2] == AVAILABLE
+    # ally_first=True → ally is model team A during their own ban phase
+    assert turn_token == BAN_PHASE_FIRST_PICK
+
+
+def test_build_obs_ban_phase_token_depends_on_coin_flip():
+    # Same ally-ban phase, but ally_first=False: ally maps to model team B,
+    # which gets the sixth (last) pick — the token must reflect that.
+    b1 = _make_brawler(1, 0)
+    _, turn_token = _build_obs(5, [b1], [], [], phase=0, ally_first=False, brawlers=[b1])
+    assert turn_token == BAN_PHASE_SIXTH_PICK
+
+
+def test_build_obs_enemy_ban_phase_token_depends_on_coin_flip():
+    # Phase 3-5: enemy bans. ally_first=True → enemy is model team B (sixth pick);
+    # ally_first=False → enemy is model team A (first pick).
+    b1 = _make_brawler(1, 0)
+    _, turn_token_ally_first = _build_obs(5, [], [b1], [], phase=3, ally_first=True, brawlers=[b1])
+    assert turn_token_ally_first == BAN_PHASE_SIXTH_PICK
+
+    _, turn_token_enemy_first = _build_obs(5, [], [b1], [], phase=3, ally_first=False, brawlers=[b1])
+    assert turn_token_enemy_first == BAN_PHASE_FIRST_PICK
 
 
 def test_build_obs_locally_banned_non_pool():
