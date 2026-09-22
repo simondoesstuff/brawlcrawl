@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from crawl.dataset import Composition, Dataset, WinLoss
+from crawl.dataset import Composition, Dataset, WinLoss, merge_stats
 
 
 class TestComposition:
@@ -109,3 +109,67 @@ class TestDataset:
         db2 = Dataset.load(path)
         assert db2.stats == {}
         assert db2.seen_tags == set()
+
+
+class TestMergeStats:
+    def test_alpha_zero_is_plain_pool(self):
+        old = WinLoss(a_wins=3, total=10)
+        new = WinLoss(a_wins=8, total=10)
+        merged = merge_stats(old, new, alpha=0.0)
+        assert merged.a_wins == old.a_wins + new.a_wins
+        assert merged.total == old.total + new.total
+
+    def test_alpha_one_fully_trusts_new(self):
+        old = WinLoss(a_wins=3, total=10)
+        new = WinLoss(a_wins=8, total=10)
+        merged = merge_stats(old, new, alpha=1.0)
+        assert merged.a_wins == new.a_wins
+        assert merged.total == new.total
+
+    def test_intermediate_alpha_discounts_old_without_inflating_total(self):
+        old = WinLoss(a_wins=0, total=100)
+        new = WinLoss(a_wins=5, total=10)
+        merged = merge_stats(old, new, alpha=0.5)
+        assert new.total <= merged.total <= old.total + new.total
+        assert merged.a_wins <= merged.total
+
+    def test_invalid_alpha_raises(self):
+        with pytest.raises(ValueError):
+            merge_stats(WinLoss(1, 2), WinLoss(1, 2), alpha=1.5)
+        with pytest.raises(ValueError):
+            merge_stats(WinLoss(1, 2), WinLoss(1, 2), alpha=-0.1)
+
+
+class TestDatasetMerge:
+    def test_union_of_metadata(self):
+        old = Dataset.from_seed({"#A"})
+        old.bad_tags.add("#DEAD")
+        old.seen_battle_ids.add("battle1")
+        new = Dataset.from_seed({"#B"})
+        new.seen_battle_ids.add("battle2")
+
+        merged = Dataset.merge(old, new, alpha=0.5)
+
+        assert merged.seen_tags == {"#A", "#B"}
+        assert merged.frontier == {"#A", "#B"}
+        assert merged.seen_battle_ids == {"battle1", "battle2"}
+        assert merged.bad_tags == {"#DEAD"}
+
+    def test_comp_only_in_one_dataset_is_unchanged(self):
+        comp = Composition(1, frozenset({1, 2, 3}), frozenset({4, 5, 6}))
+        old = Dataset.from_seed(set())
+        old.stats[comp] = WinLoss(a_wins=4, total=9)
+        new = Dataset.from_seed(set())
+
+        merged = Dataset.merge(old, new, alpha=0.9)
+        assert merged.stats[comp] == WinLoss(a_wins=4, total=9)
+
+    def test_comp_in_both_datasets_is_combined(self):
+        comp = Composition(1, frozenset({1, 2, 3}), frozenset({4, 5, 6}))
+        old = Dataset.from_seed(set())
+        old.stats[comp] = WinLoss(a_wins=3, total=10)
+        new = Dataset.from_seed(set())
+        new.stats[comp] = WinLoss(a_wins=8, total=10)
+
+        merged = Dataset.merge(old, new, alpha=0.0)
+        assert merged.stats[comp] == WinLoss(a_wins=11, total=20)

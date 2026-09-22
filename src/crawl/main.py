@@ -88,6 +88,37 @@ def dataset_extend(
 
 
 @app.command()
+def dataset_merge(
+    old: Annotated[Path, typer.Argument(help="Path to the older dataset JSON")],
+    new: Annotated[Path, typer.Argument(help="Path to the newer dataset JSON")],
+    output: Annotated[
+        Path, typer.Option("--output", "-o", help="Path to write the merged dataset JSON")
+    ],
+    alpha: Annotated[
+        float,
+        typer.Option(
+            help="Bias toward the newer dataset for compositions seen in both, in [0, 1]. "
+            + "0 pools purely by sample count; 1 fully trusts the new dataset's win rate."
+        ),
+    ] = 0.5,
+) -> None:
+    """Merge two datasets crawled at different times into one."""
+    from crawl.dataset import Dataset
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    old_db = Dataset.load(old)
+    new_db = Dataset.load(new)
+    merged = Dataset.merge(old_db, new_db, alpha=alpha)
+    merged.save(output)
+
+    print(
+        f"Merged {len(old_db.stats)} + {len(new_db.stats)} compositions "
+        + f"into {len(merged.stats)} at {output} (alpha={alpha})."
+    )
+
+
+@app.command()
 def dataset_audit(
     dataset: Annotated[Path, typer.Argument(help="Path to dataset JSON")],
 ) -> None:

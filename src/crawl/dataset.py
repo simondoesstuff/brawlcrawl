@@ -1,4 +1,5 @@
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypedDict, cast
@@ -48,6 +49,27 @@ class WinLoss:
     total: int = 0
 
 
+def merge_stats(old: WinLoss, new: WinLoss, alpha: float) -> WinLoss:
+    """Combine stats for one composition seen in both an older and a newer dataset.
+
+    `total` doubles as the training loss weight downstream (see geneus/train.py),
+    so the combined total must never exceed the true observed evidence
+    (old.total + new.total). Rather than boosting new's weight, we discount
+    old's: `alpha` in [0, 1] scales down old's counts before pooling by sample
+    count, so alpha=0 is a plain count-weighted pool and alpha=1 fully trusts
+    the new dataset's win rate (old is discounted to zero weight).
+    """
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError("alpha must be in [0, 1]")
+    old_weight = old.total * (1.0 - alpha)
+    old_wins = old.a_wins * (1.0 - alpha)
+    total_f = old_weight + new.total
+    wins_f = old_wins + new.a_wins
+    total = math.floor(total_f + 0.5)
+    a_wins = min(total, max(0, math.floor(wins_f / total_f * total + 0.5)))
+    return WinLoss(a_wins=a_wins, total=total)
+
+
 @dataclass
 class Dataset:
     seen_tags: set[str]
@@ -62,6 +84,31 @@ class Dataset:
             seen_tags=set(seed_tags),
             frontier=set(seed_tags),
             seen_battle_ids=set(),
+        )
+
+    @classmethod
+    def merge(cls, old: "Dataset", new: "Dataset", alpha: float = 0.5) -> "Dataset":
+        """Merge two datasets crawled at different times into one.
+
+        Compositions seen in only one dataset are carried over unchanged;
+        compositions seen in both are combined via `merge_stats`, with `alpha`
+        biasing the result toward the newer dataset's win rate.
+        """
+        stats: dict[Composition, WinLoss] = dict(old.stats)
+        for comp, new_wl in new.stats.items():
+            old_wl = stats.get(comp)
+            stats[comp] = (
+                merge_stats(old_wl, new_wl, alpha)
+                if old_wl is not None
+                else WinLoss(a_wins=new_wl.a_wins, total=new_wl.total)
+            )
+
+        return cls(
+            seen_tags=old.seen_tags | new.seen_tags,
+            frontier=old.frontier | new.frontier,
+            seen_battle_ids=old.seen_battle_ids | new.seen_battle_ids,
+            bad_tags=old.bad_tags | new.bad_tags,
+            stats=stats,
         )
 
     def save(self, path: Path) -> None:

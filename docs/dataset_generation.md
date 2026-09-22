@@ -55,6 +55,12 @@ with BrawlStarsClient() as client:
 
 Each player's battlelog holds ~25 battles; soloRanked filtering and trophy gating leave ~8 qualifying battles per player. Each battle has 6 players, yielding ~14 net new tags per frontier tag after dedup. Frontier growth is roughly 14× per step before saturation.
 
+## Merging datasets
+
+Two datasets crawled at different times can be combined with `Dataset.merge(old, new, alpha)` (CLI: `dataset-merge`). Compositions seen in only one dataset carry over unchanged. Compositions seen in both are combined via `merge_stats`, which pools `a_wins`/`total` by sample count and uses `alpha` in `[0, 1]` to discount the older dataset's counts before pooling: `alpha=0` is a plain count-weighted pool, `alpha=1` fully trusts the newer dataset's win rate for that matchup and drops the old evidence entirely.
+
+`total` doubles as the training loss weight (see `geneus/train.py`), so old is discounted rather than new being boosted — the combined total can only shrink toward (never exceed) the true `old.total + new.total`, keeping the merged confidence weight honest.
+
 ## Crash safety
 
 If the process dies mid-step, the dataset on disk is consistent: `seen_battle_ids` guards against double-counting on resume, and unfinished frontier tags are re-queried cleanly. Any `BrawlApiError` (malformed 200 response) propagates immediately — do not catch it silently.
