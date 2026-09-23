@@ -35,6 +35,7 @@ app = typer.Typer(add_completion=False)
 _DATA_DIR = Path("data")
 _OUT_DIR = Path("data/draft_model")
 _MODEL_FILENAME = "draft_q.eqx"
+_BEST_MODEL_FILENAME = "draft_q_best.eqx"
 _CHECKPOINTS_DIRNAME = "checkpoints"
 
 # Precomputed JAX constants for the Bellman backup
@@ -429,8 +430,9 @@ def save_checkpoint(
     opt_state: optax.OptState,
     rng: np.random.Generator,
     iteration: int,
-    best_loss: float,
     loss_history: list[float],
+    best_win_rate: float,
+    eval_history: list[dict[str, float]],
 ) -> None:
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     eqx.tree_serialise_leaves(ckpt_dir / "model.eqx", q_net)
@@ -438,8 +440,9 @@ def save_checkpoint(
     np.save(ckpt_dir / "rng.npy", rng.bit_generator.state, allow_pickle=True)  # type: ignore[arg-type]
     meta = {
         "iteration": iteration,
-        "best_loss": best_loss,
         "loss_history": loss_history,
+        "best_win_rate": best_win_rate,
+        "eval_history": eval_history,
     }
     (ckpt_dir / "meta.json").write_text(json.dumps(meta))
 
@@ -449,7 +452,15 @@ def load_checkpoint(
     q_net: DraftQNetwork,
     opt_state: optax.OptState,
     rng: np.random.Generator,
-) -> tuple[DraftQNetwork, optax.OptState, np.random.Generator, int, float, list[float]]:
+) -> tuple[
+    DraftQNetwork,
+    optax.OptState,
+    np.random.Generator,
+    int,
+    list[float],
+    float,
+    list[dict[str, float]],
+]:
     q_net = eqx.tree_deserialise_leaves(ckpt_dir / "model.eqx", q_net)
     opt_state = eqx.tree_deserialise_leaves(ckpt_dir / "opt_state.eqx", opt_state)
     rng.bit_generator.state = np.load(ckpt_dir / "rng.npy", allow_pickle=True).item()
@@ -459,8 +470,10 @@ def load_checkpoint(
         opt_state,
         rng,
         meta["iteration"],
-        meta["best_loss"],
         meta["loss_history"],
+        # Older checkpoints (pre win-rate tracking) won't have these keys.
+        meta.get("best_win_rate", -1.0),
+        meta.get("eval_history", []),
     )
 
 
@@ -619,7 +632,7 @@ def train(
         typer.Option(
             help=(
                 "Output directory for training artifacts "
-                f"({_MODEL_FILENAME}, {_CHECKPOINTS_DIRNAME}/)"
+                f"({_MODEL_FILENAME}, {_BEST_MODEL_FILENAME}, {_CHECKPOINTS_DIRNAME}/)"
             )
         ),
     ] = _OUT_DIR,
@@ -732,21 +745,31 @@ def train(
     rng = np.random.default_rng(seed)
 
     out.mkdir(parents=True, exist_ok=True)
-    model_path = out / _MODEL_FILENAME
+    model_path = out / _MODEL_FILENAME  # latest weights, overwritten periodically
+    best_model_path = out / _BEST_MODEL_FILENAME  # best win-rate-vs-random so far
     ckpt_dir = out / _CHECKPOINTS_DIRNAME
     if checkpoint_every > 0:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    best_loss = float("inf")
     loss_history: list[float] = []
+    best_win_rate = -1.0
+    eval_history: list[dict[str, float]] = []
     start_iter = 1
 
     if resume_from is not None:
-        q_net, opt_state, rng, resumed_iter, best_loss, loss_history = load_checkpoint(
-            resume_from, q_net, opt_state, rng
-        )
+        (
+            q_net,
+            opt_state,
+            rng,
+            resumed_iter,
+            loss_history,
+            best_win_rate,
+            eval_history,
+        ) = load_checkpoint(resume_from, q_net, opt_state, rng)
         start_iter = resumed_iter + 1
-        typer.echo(f"  Resumed from iter {resumed_iter}  (best_loss={best_loss:.4f})")
+        typer.echo(
+            f"  Resumed from iter {resumed_iter}  (best_win_rate={best_win_rate:.3f})"
+        )
 
     typer.echo(
         f"\nTraining iters {start_iter}–{n_iters} ({batch_episodes} episodes/step)..."
@@ -768,9 +791,18 @@ def train(
         loss_val = float(loss)
         loss_history.append(loss_val)
 
-        if loss_val < best_loss:
-            best_loss = loss_val
+        # Self-play loss is not a fitness signal: a converged minimax
+        # equilibrium can sit at a nonzero, noisy loss indefinitely, and
+        # nothing about "lower loss so far" implies "stronger policy" when
+        # both sides are moving targets for each other. So `model_path`
+        # tracks the *latest* weights (overwritten periodically below, plus
+        # unconditionally once training ends), and `best_model_path` tracks
+        # the checkpoint with the best measured win-rate-vs-random — the one
+        # number here that's actually evaluated against a fixed opponent.
+        if i % log_every == 0:
             eqx.tree_serialise_leaves(model_path, q_net)
+            mean_loss = float(np.mean(loss_history[-log_every:]))
+            pbar.set_postfix(loss=f"{mean_loss:.4f}", best_wr=f"{best_win_rate:.3f}")
 
         if checkpoint_every > 0 and i % checkpoint_every == 0:
             save_checkpoint(
@@ -779,22 +811,16 @@ def train(
                 opt_state,
                 rng,
                 i,
-                best_loss,
                 loss_history,
+                best_win_rate,
+                eval_history,
             )
 
-        if i % log_every == 0:
-            mean_loss = float(np.mean(loss_history[-log_every:]))
-            pbar.set_postfix(loss=f"{mean_loss:.4f}", best=f"{best_loss:.4f}")
-
         if eval_every > 0 and i % eval_every == 0:
-            # Self-play loss isn't informative on its own (a converged minimax
-            # equilibrium can have nonzero loss, and loss says nothing about
-            # playing strength) — periodically report win rate vs. a random
-            # adversary instead. A fresh RNG keeps this independent of (and
-            # reproducible across) the training rng, so it doesn't perturb
-            # resume determinism, and gives a fixed, low-variance eval scenario
-            # set to compare iterations against.
+            # A fresh RNG keeps this independent of (and reproducible across)
+            # the training rng, so it doesn't perturb resume determinism, and
+            # gives a fixed, low-variance eval scenario set to compare
+            # iterations against.
             eval_results = evaluate_vs_random(
                 q_net,
                 char_encs_all,
@@ -807,14 +833,23 @@ def train(
                 n_episodes=eval_episodes,
                 eval_temp=eval_temp,
             )
+            eval_history.append({"iteration": i, **eval_results})
             pbar.write(
                 f"  [eval @ iter {i}] "
                 f"win_A={eval_results['win_rate_as_a']:.3f}  "
                 f"win_B={eval_results['win_rate_as_b']:.3f}  "
                 f"combined={eval_results['win_rate_combined']:.3f}"
             )
+            if eval_results["win_rate_combined"] > best_win_rate:
+                best_win_rate = eval_results["win_rate_combined"]
+                eqx.tree_serialise_leaves(best_model_path, q_net)
 
-    typer.echo(f"\nBest loss: {best_loss:.5f}  →  {model_path}")
+    eqx.tree_serialise_leaves(model_path, q_net)
+    typer.echo(f"\nLatest weights  →  {model_path}")
+    if best_win_rate >= 0:
+        typer.echo(f"Best win-rate-vs-random ({best_win_rate:.3f})  →  {best_model_path}")
+    else:
+        typer.echo("No periodic eval ran (--eval-every 0) — no best-win-rate checkpoint saved")
 
 
 def _load_terminal_model_and_encs(
@@ -960,14 +995,18 @@ def eval_sweep(
     )
 
     typer.echo(
-        f"{'iter':>8}  {'win_A':>6}  {'win_B':>6}  {'combined':>8}  {'best_loss':>9}"
+        f"{'iter':>8}  {'win_A':>6}  {'win_B':>6}  {'combined':>8}  {'recent_loss':>11}"
     )
-    typer.echo("-" * 48)
+    typer.echo("-" * 50)
 
     for ckpt_dir in tqdm(ckpt_dirs, desc="sweep", unit="ckpt"):
         meta: dict[str, Any] = json.loads((ckpt_dir / "meta.json").read_text())
         iteration = meta["iteration"]
-        best_loss = meta["best_loss"]
+        # Informational only — self-play loss isn't a fitness signal, the
+        # win-rate columns to the left are. Mean of the last 100 logged
+        # losses, just to eyeball optimizer behavior alongside win rate.
+        loss_history = meta["loss_history"]
+        recent_loss = float(np.mean(loss_history[-100:])) if loss_history else float("nan")
 
         q_net = DraftQNetwork(
             h_terminal=h_terminal,
@@ -996,7 +1035,7 @@ def eval_sweep(
             f"{results['win_rate_as_a']:>6.3f}  "
             f"{results['win_rate_as_b']:>6.3f}  "
             f"{results['win_rate_combined']:>8.3f}  "
-            f"{best_loss:>9.4f}"
+            f"{recent_loss:>11.4f}"
         )
 
 
