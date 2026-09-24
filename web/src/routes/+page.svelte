@@ -19,65 +19,29 @@
 	<title>BrawlCrawl — draft assist</title>
 </svelte:head>
 
-<main>
-	<header class="app-header">
-		<h1>BrawlCrawl</h1>
-	</header>
-
-	{#if draft.view === 'loading'}
-		<p class="status">Loading models…</p>
-	{:else if draft.view === 'error'}
-		<p class="status error">{draft.errorMsg}</p>
-	{:else}
-		{#if draft.view === 'map-select'}
-			<MapSelect {draft} />
-		{:else if draft.view === 'coin-flip'}
-			<CoinFlip {draft} />
-		{:else if draft.view === 'drafting'}
-			<Draft {draft} onOpenFilter={() => (filterOpen = true)} />
-		{/if}
-
-		<footer class="app-footer">
-			<Legend />
-		</footer>
-
-		{#if filterOpen}
-			<FilterPanel {draft} onClose={() => (filterOpen = false)} />
-		{/if}
+{#if draft.view === 'loading'}
+	<p class="status">Loading models…</p>
+{:else if draft.view === 'error'}
+	<p class="status error">{draft.errorMsg}</p>
+{:else}
+	{#if draft.view === 'map-select'}
+		<MapSelect {draft} />
+	{:else if draft.view === 'coin-flip'}
+		<CoinFlip {draft} />
+	{:else if draft.view === 'drafting'}
+		<Draft {draft} onOpenFilter={() => (filterOpen = true)} />
 	{/if}
-</main>
+
+	<footer class="app-footer">
+		<Legend />
+	</footer>
+
+	{#if filterOpen}
+		<FilterPanel {draft} onClose={() => (filterOpen = false)} />
+	{/if}
+{/if}
 
 <style>
-	:global(html) {
-		color-scheme: light dark;
-	}
-	:global(body) {
-		background: var(--color-bg);
-		color: var(--color-fg);
-		margin: 0;
-		font-family:
-			system-ui,
-			-apple-system,
-			'Segoe UI',
-			sans-serif;
-	}
-	main {
-		max-width: 64rem;
-		margin: 0 auto;
-		padding: 1rem;
-		padding-bottom: 3rem;
-		box-sizing: border-box;
-		display: flex;
-		flex-direction: column;
-		gap: 1.1rem;
-		min-height: 100dvh;
-	}
-	.app-header h1 {
-		font-size: 1.1rem;
-		margin: 0;
-		opacity: 0.85;
-		letter-spacing: 0.02em;
-	}
 	.status {
 		opacity: 0.7;
 		padding: 2rem 0;

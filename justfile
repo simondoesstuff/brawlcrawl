@@ -28,7 +28,7 @@ continue-training ckpt data *args:
 	uv run geneus --init-from "{{ckpt}}" --battles-file "{{data}}" "$@"
 
 export-onnx:
-	snakemake --cores 1 export_onnx
+	snakemake --cores 1 export_onnx web/static/data/tier_lists.json
 
 web-test: export-onnx
 	cd web && bun test

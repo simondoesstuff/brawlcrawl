@@ -203,6 +203,16 @@ rule tier_lists:
 		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --output {output}"
 
 
+rule tier_lists_web:
+	"""Copy the Monte Carlo tier lists into web/static for the tier-list UI."""
+	input:
+		"data/tier_lists.json"
+	output:
+		"web/static/data/tier_lists.json"
+	shell:
+		"cp {input} {output}"
+
+
 rule export_onnx:
 	"""Trace BrawlModel + DraftQNetwork to ONNX and write companion data for web/."""
 	input:
