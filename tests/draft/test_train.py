@@ -144,7 +144,7 @@ def test_loss_finite_with_skipped_episodes(
         terminal_model, config, rng, n_episodes=4,
     )
     assert not batch["active"][:, :6].any()
-    loss = _compute_loss(q_net, batch)
+    loss = _compute_loss(q_net, batch, 0.1)
     assert jnp.isfinite(loss)
 
 
@@ -158,6 +158,45 @@ def test_loss_well_defined_when_all_active(
         terminal_model, config, rng, n_episodes=4,
     )
     assert batch["active"].all()
-    loss = _compute_loss(q_net, batch)
+    loss = _compute_loss(q_net, batch, 0.1)
     assert jnp.isfinite(loss)
     assert loss >= 0
+
+
+def test_bellman_targets_ignore_batch_temperatures(
+    q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table, terminal_model
+):
+    """The whole point of the fix: the Bellman-target V must not depend on
+    the per-player, per-episode exploration `temperatures` recorded in the
+    batch — only on the fixed `bellman_temp` passed to _compute_loss. Two
+    batches differing only in `temperatures` must give the same loss."""
+    config = DraftConfig(pool_min=N_CHARS, pool_max=N_CHARS, skip_ban_prob=0.0)
+    rng = np.random.default_rng(0)
+    batch = simulate_batch(
+        q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+        terminal_model, config, rng, n_episodes=4,
+    )
+
+    loss_low_temp = _compute_loss(q_net, {**batch, "temperatures": jnp.full_like(batch["temperatures"], 0.05)}, 0.1)
+    loss_high_temp = _compute_loss(q_net, {**batch, "temperatures": jnp.full_like(batch["temperatures"], 2.0)}, 0.1)
+
+    assert jnp.allclose(loss_low_temp, loss_high_temp), (
+        "Loss must be invariant to batch['temperatures'] — the Bellman "
+        "target should only depend on bellman_temp"
+    )
+
+
+def test_bellman_temp_changes_the_loss(
+    q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table, terminal_model
+):
+    # Sanity check the fixture actually exercises bellman_temp: a materially
+    # different bellman_temp should (generically) change the loss value.
+    config = DraftConfig(pool_min=N_CHARS, pool_max=N_CHARS, skip_ban_prob=0.0)
+    rng = np.random.default_rng(0)
+    batch = simulate_batch(
+        q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+        terminal_model, config, rng, n_episodes=4,
+    )
+    loss_a = _compute_loss(q_net, batch, 0.1)
+    loss_b = _compute_loss(q_net, batch, 1.0)
+    assert not jnp.allclose(loss_a, loss_b)

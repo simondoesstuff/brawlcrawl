@@ -125,6 +125,18 @@ class DraftConfig:
     # ordinary ban sub-MDP ever produces zero bans, since each ban turn must
     # select a char, but the CLI/web tool can be pointed at a no-ban draft.
     skip_ban_prob: float = 0.05
+    # Fixed entropy temperature used ONLY for the soft-Bellman bootstrap (the
+    # V computed in _compute_loss). Deliberately decoupled from each
+    # player's random `temperature` (used only to sample actions during
+    # rollout, for behavioral diversity in the self-play data): V[t] becomes
+    # the regression target for a *different* player's turn (t-1), so if it
+    # were built from the acting player's own random per-episode temperature,
+    # identical (obs, turn_token) pairs would get different targets purely
+    # because of an unobserved random draw belonging to someone else's turn.
+    # A single fixed value makes Q consistently regress toward one
+    # well-defined soft-optimal policy. Match this to the temperature you
+    # actually deploy at (see `eval_temp`).
+    bellman_temp: float = 0.1
 
 
 # ---------------------------------------------------------------------------

@@ -344,27 +344,36 @@ def simulate_batch(
 # ---------------------------------------------------------------------------
 
 
-def _compute_loss(q_net: DraftQNetwork, batch: dict[str, Any]) -> jax.Array:
+def _compute_loss(
+    q_net: DraftQNetwork, batch: dict[str, Any], bellman_temp: float
+) -> jax.Array:
     """Soft Q MSE loss with Bellman backup.
 
     Q_local is in logit space from the acting team's perspective.
     Bellman targets flip sign between consecutive turns that switch teams
     (zero-sum minimax with soft entropy regularisation).
 
+    `bellman_temp` is a single fixed entropy temperature used to build every
+    V — deliberately NOT the per-player, per-episode random `temperatures`
+    used only for action sampling during rollout. V[t] becomes the
+    regression target for a *different* player's turn (t-1); using each
+    player's own random exploration temperature there would make identical
+    (obs, turn_token) pairs regress toward different targets depending on an
+    unobserved random draw belonging to someone else's turn. See
+    DraftConfig.bellman_temp.
+
     `active` excludes turns skipped by config.skip_ban_prob (the ban phase
     wasn't simulated for that episode) from the loss. Those positions still
     get a forward pass and a well-defined (if meaningless) target — masking
     happens only in the final average — so no NaN/inf guarding is needed:
     zero-filled valid_masks there make V finite (logsumexp of an all -1e9
-    row), and zero-filled temperatures are clipped away from zero same as
-    always.
+    row).
     """
     char_encs = batch["char_encs"]  # [N, n_chars, h]
     player_states = batch["player_states"]  # [N, 12, n_chars]
     turn_tokens = batch["turn_tokens"]  # [N, 12]
     valid_masks = batch["valid_masks"]  # [N, 12, n_chars]
     actions = batch["actions"]  # [N, 12]
-    temps = batch["temperatures"]  # [N, 12]
     active = batch["active"]  # [N, 12]
     terminal_logits = batch["terminal_logits"]  # [N]
 
@@ -377,11 +386,10 @@ def _compute_loss(q_net: DraftQNetwork, batch: dict[str, Any]) -> jax.Array:
     # Bellman targets (stopgradient so we don't bootstrap through gradients)
     q_sg = jax.lax.stop_gradient(q_all)
 
-    # Soft values: V[n, t] = T[n,t] * logsumexp(q_sg[n,t,valid] / T[n,t])
+    # Soft values: V[n, t] = bellman_temp * logsumexp(q_sg[n,t,valid] / bellman_temp)
     q_masked = jnp.where(valid_masks, q_sg, -1e9)
-    safe_temps = jnp.clip(temps, 1e-6, None)
-    V = safe_temps * jax.scipy.special.logsumexp(
-        q_masked / safe_temps[..., None], axis=-1
+    V = bellman_temp * jax.scipy.special.logsumexp(
+        q_masked / bellman_temp, axis=-1
     )  # [N, 12]
 
     # targets[:, 0..10] = V[:, 1..11] * bellman_sign
@@ -401,7 +409,7 @@ def _compute_loss(q_net: DraftQNetwork, batch: dict[str, Any]) -> jax.Array:
     return jnp.sum(sq_err) / jnp.clip(jnp.sum(active_f), 1.0, None)
 
 
-def make_step_fn(optimizer: optax.GradientTransformation):
+def make_step_fn(optimizer: optax.GradientTransformation, bellman_temp: float):
     """Return a JIT-compiled (q_net, opt_state, batch) → (q_net, opt_state, loss) step."""
 
     @eqx.filter_jit
@@ -410,7 +418,9 @@ def make_step_fn(optimizer: optax.GradientTransformation):
         opt_state: optax.OptState,
         batch: dict[str, Any],
     ) -> tuple[DraftQNetwork, optax.OptState, jax.Array]:
-        loss, grads = eqx.filter_value_and_grad(_compute_loss)(q_net, batch)
+        loss, grads = eqx.filter_value_and_grad(_compute_loss)(
+            q_net, batch, bellman_temp
+        )
         updates, new_state = optimizer.update(
             grads, opt_state, eqx.filter(q_net, eqx.is_array)
         )
@@ -637,7 +647,7 @@ def train(
         ),
     ] = _OUT_DIR,
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = _DATA_DIR,
-    n_iters: Annotated[int, typer.Option(help="Training iterations")] = 50_000,
+    n_iters: Annotated[int, typer.Option(help="Training iterations")] = 7_000,
     batch_episodes: Annotated[
         int, typer.Option(help="Episodes per gradient step")
     ] = 64,
@@ -667,13 +677,22 @@ def train(
             help="Probability an episode skips the ban phase entirely (no chars banned)"
         ),
     ] = 0.05,
+    bellman_temp: Annotated[
+        float,
+        typer.Option(
+            help=(
+                "Fixed entropy temperature for the soft-Bellman target V "
+                "(decoupled from the per-player random exploration temperature)"
+            )
+        ),
+    ] = 0.1,
     checkpoint_every: Annotated[
         int, typer.Option(help="Save checkpoint every N iters (0=off)")
     ] = 5000,
     log_every: Annotated[int, typer.Option(help="Log interval in iterations")] = 100,
     eval_every: Annotated[
         int, typer.Option(help="Win-rate-vs-random eval interval in iterations (0=off)")
-    ] = 2000,
+    ] = 100,
     eval_episodes: Annotated[
         int, typer.Option(help="Episodes per periodic eval (split evenly A/B)")
     ] = 200,
@@ -733,7 +752,7 @@ def train(
     )
     optimizer = optax.adamw(learning_rate=schedule, weight_decay=weight_decay)
     opt_state = optimizer.init(eqx.filter(q_net, eqx.is_array))
-    step_fn = make_step_fn(optimizer)
+    step_fn = make_step_fn(optimizer, bellman_temp)
 
     config = DraftConfig(
         pool_min=pool_min,
@@ -741,6 +760,7 @@ def train(
         temp_min=temp_min,
         temp_max=temp_max,
         skip_ban_prob=skip_ban_prob,
+        bellman_temp=bellman_temp,
     )
     rng = np.random.default_rng(seed)
 
@@ -847,9 +867,13 @@ def train(
     eqx.tree_serialise_leaves(model_path, q_net)
     typer.echo(f"\nLatest weights  →  {model_path}")
     if best_win_rate >= 0:
-        typer.echo(f"Best win-rate-vs-random ({best_win_rate:.3f})  →  {best_model_path}")
+        typer.echo(
+            f"Best win-rate-vs-random ({best_win_rate:.3f})  →  {best_model_path}"
+        )
     else:
-        typer.echo("No periodic eval ran (--eval-every 0) — no best-win-rate checkpoint saved")
+        typer.echo(
+            "No periodic eval ran (--eval-every 0) — no best-win-rate checkpoint saved"
+        )
 
 
 def _load_terminal_model_and_encs(
@@ -1006,7 +1030,9 @@ def eval_sweep(
         # win-rate columns to the left are. Mean of the last 100 logged
         # losses, just to eyeball optimizer behavior alongside win rate.
         loss_history = meta["loss_history"]
-        recent_loss = float(np.mean(loss_history[-100:])) if loss_history else float("nan")
+        recent_loss = (
+            float(np.mean(loss_history[-100:])) if loss_history else float("nan")
+        )
 
         q_net = DraftQNetwork(
             h_terminal=h_terminal,
