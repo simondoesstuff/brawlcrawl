@@ -5,14 +5,14 @@
 // src/lib/pick's convention (the human ally in the interactive tool).
 //
 // Turn order: player bans at phases 0-2, adversary bans at phases 3-5,
-// *regardless* of which team ends up first-picking. This is faithful to the
-// model: BAN_PHASE is one shared token for all six ban turns, and per
-// env.py's get_player_observed_states each side only ever observes its own
-// bans during this phase — ban order carries no information the model can
-// see, and buildObs's ban branch is keyed off "ally" vs "enemy" bans, not
-// off allyFirst. Picks (phase 6+) *do* care about allyFirst — team A/B
-// there is resolved against it via phase.ts's pickIsAlly, matching
-// buildObs's `isAlly === allyFirst` rule.
+// *regardless* of which team ends up first-picking — only the turn token fed
+// to the model (BAN_PHASE_FIRST_PICK vs BAN_PHASE_SIXTH_PICK, resolved from
+// allyFirst in buildObs) encodes which side is banning; the observed
+// character states during bans still only ever reveal each side's own bans
+// (env.py's get_player_observed_states), never which team they belong to.
+// Picks (phase 6+) *do* care about allyFirst — team A/B there is resolved
+// against it via phase.ts's pickIsAlly, matching buildObs's
+// `isAlly === allyFirst` rule.
 //
 // Pick 6 is chosen with the same draftQ policy as every other turn, rather
 // than scoring every pick-6 candidate with the terminal model (which is what

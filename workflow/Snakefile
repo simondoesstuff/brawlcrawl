@@ -189,8 +189,8 @@ rule battlelog:
 rule tier_lists:
 	"""Monte Carlo per-map first-pick tier lists, scored by the terminal BrawlModel."""
 	input:
-		terminal_ckpt="data/model/model.eqx",
-		draft_ckpt="data/draft_model/draft_q.eqx",
+		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
+		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
 		brawler_class="data/brawler_class.json",
 		brawler_range="data/brawler_effective_range.json",
 		brawler_destruction="data/brawler_destruction.json",
@@ -216,8 +216,8 @@ rule tier_lists_web:
 rule export_onnx:
 	"""Trace BrawlModel + DraftQNetwork to ONNX and write companion data for web/."""
 	input:
-		terminal_ckpt="data/model/model.eqx",
-		draft_ckpt="data/draft_model/draft_q.eqx",
+		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
+		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
 	output:
 		"web/static/models/draft_q.onnx",
 		"web/static/models/terminal_pick6.onnx",

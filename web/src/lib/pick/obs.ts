@@ -34,7 +34,8 @@ export function buildObs(
 		PICKED_A,
 		PICKED_B,
 		LOCALLY_BANNED,
-		BAN_PHASE,
+		BAN_PHASE_FIRST_PICK,
+		BAN_PHASE_SIXTH_PICK,
 		TURN_SCHEDULE
 	} = draftState;
 	const obs = new Int32Array(nChars); // defaults to AVAILABLE (0)
@@ -42,10 +43,10 @@ export function buildObs(
 
 	if (phase < 3) {
 		for (const ci of allyBanCharIdxs) obs[ci] = GLOBALLY_BANNED;
-		turnToken = BAN_PHASE;
+		turnToken = allyFirst ? BAN_PHASE_FIRST_PICK : BAN_PHASE_SIXTH_PICK;
 	} else if (phase < 6) {
 		for (const ci of enemyBanCharIdxs) obs[ci] = GLOBALLY_BANNED;
-		turnToken = BAN_PHASE;
+		turnToken = allyFirst ? BAN_PHASE_SIXTH_PICK : BAN_PHASE_FIRST_PICK;
 	} else {
 		for (const ci of [...allyBanCharIdxs, ...enemyBanCharIdxs]) obs[ci] = GLOBALLY_BANNED;
 		for (const { isAlly, charIdx } of picks)

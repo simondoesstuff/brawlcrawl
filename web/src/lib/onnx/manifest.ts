@@ -20,7 +20,8 @@ export interface Manifest {
 		PICKED_A: number;
 		PICKED_B: number;
 		N_CHAR_STATES: number;
-		BAN_PHASE: number;
+		BAN_PHASE_FIRST_PICK: number;
+		BAN_PHASE_SIXTH_PICK: number;
 		N_DRAFT_TOKENS: number;
 		/** 12 entries: (turn_token, "A" | "B", seat_within_team) */
 		TURN_SCHEDULE: [turn_token: number, team: 'A' | 'B', seat: number][];
