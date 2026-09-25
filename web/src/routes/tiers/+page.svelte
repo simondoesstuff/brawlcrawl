@@ -3,6 +3,7 @@
 	import TierBoard from '$lib/components/TierBoard.svelte';
 	import TierMapPicker from '$lib/components/TierMapPicker.svelte';
 	import type { Brawler, Metadata } from '$lib/onnx/metadata';
+	import { computeOverallTierList, OVERALL_EVENT_ID } from '$lib/tierlist/overall';
 	import type { TierListsData } from '$lib/tierlist/types';
 
 	type Policy = 'random' | 'optimal';
@@ -31,7 +32,7 @@
 	let statusByPolicy = $state<Record<Policy, PolicyStatus>>({ random: 'idle', optimal: 'idle' });
 	let errorByPolicy = $state<Partial<Record<Policy, string>>>({});
 	let brawlerMeta = $state<Map<number, Brawler> | null>(null);
-	let selectedEventId = $state<number | null>(null);
+	let selectedEventId = $state<number | null>(OVERALL_EVENT_ID);
 
 	async function loadPolicy(p: Policy) {
 		if (cache[p] || statusByPolicy[p] === 'loading') return;
@@ -79,16 +80,28 @@
 				: 'loading'
 	);
 	const data = $derived(cache[policy] ?? null);
+	const overallMap = $derived(data ? computeOverallTierList(data.maps) : null);
+	const displayMaps = $derived(overallMap && data ? [overallMap, ...data.maps] : (data?.maps ?? []));
 
 	// Keep the selection valid when switching datasets: same event universe,
-	// but an in-progress optimal run may not yet cover every map.
+	// but an in-progress optimal run may not yet cover every map. "Overall" is
+	// always valid once data has loaded, since it's derived from whatever maps
+	// are present.
 	$effect(() => {
-		if (data && !data.maps.some((m) => m.event_id === selectedEventId)) {
-			selectedEventId = data.maps[0]?.event_id ?? null;
+		if (
+			data &&
+			selectedEventId !== OVERALL_EVENT_ID &&
+			!data.maps.some((m) => m.event_id === selectedEventId)
+		) {
+			selectedEventId = OVERALL_EVENT_ID;
 		}
 	});
 
-	const selectedMap = $derived(data?.maps.find((m) => m.event_id === selectedEventId) ?? null);
+	const selectedMap = $derived(
+		selectedEventId === OVERALL_EVENT_ID
+			? overallMap
+			: (data?.maps.find((m) => m.event_id === selectedEventId) ?? null)
+	);
 </script>
 
 <svelte:head>
@@ -119,7 +132,7 @@
 	{:else if view === 'error'}
 		<p class="status error">{errorByPolicy[policy]}</p>
 	{:else if data}
-		<TierMapPicker maps={data.maps} {selectedEventId} onSelect={(id) => (selectedEventId = id)} />
+		<TierMapPicker maps={displayMaps} {selectedEventId} onSelect={(id) => (selectedEventId = id)} />
 
 		{#if selectedMap}
 			<TierBoard map={selectedMap} {brawlerMeta} />
