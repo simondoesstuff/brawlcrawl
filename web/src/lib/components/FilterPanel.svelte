@@ -1,19 +1,12 @@
 <script lang="ts">
 	import type { DraftState } from '$lib/pick/draftState.svelte';
-	import { fuzzyMatches } from '$lib/pick/fuzzy';
-	import { RARITY_COLORS } from '$lib/pick/constants';
+	import OwnedBrawlersEditor from './OwnedBrawlersEditor.svelte';
 
 	interface Props {
 		draft: DraftState;
 		onClose: () => void;
 	}
 	let { draft, onClose }: Props = $props();
-
-	let search = $state('');
-
-	const brawlers = $derived(draft.engine!.metadata.brawlers);
-	const shown = $derived(search.trim() ? fuzzyMatches(search, brawlers.map((b) => b.name)) : brawlers.map((b) => b.name));
-	const byName = $derived(new Map(brawlers.map((b) => [b.name, b])));
 
 	function onBackdropKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') onClose();
@@ -29,7 +22,7 @@
 		onclick={(e) => e.stopPropagation()}
 		role="dialog"
 		aria-modal="true"
-		aria-label="Owned brawlers filter"
+		aria-label="Owned brawlers"
 		tabindex="-1"
 	>
 		<header>
@@ -37,23 +30,10 @@
 			<button type="button" class="close" onclick={onClose} aria-label="Close">✕</button>
 		</header>
 		<p class="hint">
-			Select the brawlers you own. When enabled, recommendations only consider these — press
-			<kbd>/</kbd> then <kbd>Enter</kbd> during a draft to toggle.
+			When you have any brawlers saved, recommendations only consider these — press <kbd>/</kbd> then
+			<kbd>Enter</kbd> during a draft to toggle. Also editable from the Settings tab.
 		</p>
-		<input class="search" placeholder="Search…" bind:value={search} />
-		<div class="owned-grid">
-			{#each shown as name (name)}
-				{@const b = byName.get(name)!}
-				<label class="chip" style:--c={RARITY_COLORS[b.rarity]}>
-					<input type="checkbox" checked={draft.filterIds.has(b.id)} onchange={() => draft.toggleOwned(b.id)} />
-					{name}
-				</label>
-			{/each}
-		</div>
-		<footer>
-			<span>{draft.filterIds.size} owned</span>
-			<button type="button" onclick={() => draft.clearOwned()}>Clear all</button>
-		</footer>
+		<OwnedBrawlersEditor brawlers={draft.engine!.metadata.brawlers} />
 	</div>
 </div>
 
@@ -73,6 +53,7 @@
 		width: 100%;
 		max-width: 40rem;
 		max-height: 85vh;
+		overflow-y: auto;
 		border-radius: 1em 1em 0 0;
 		padding: 1em;
 		display: flex;
@@ -114,46 +95,5 @@
 		border: 1px solid currentColor;
 		border-radius: 0.3em;
 		padding: 0 0.3em;
-	}
-	.search {
-		padding: 0.6em 0.8em;
-		border-radius: 0.5em;
-		border: 1px solid color-mix(in oklab, var(--color-fg) 20%, transparent);
-		background: var(--color-bg);
-		color: var(--color-fg);
-		font: inherit;
-	}
-	.owned-grid {
-		overflow-y: auto;
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
-		gap: 0.35em;
-	}
-	.chip {
-		display: flex;
-		align-items: center;
-		gap: 0.4em;
-		padding: 0.4em 0.55em;
-		border-radius: 0.4em;
-		background: color-mix(in oklab, var(--color-fg) 4%, transparent);
-		font-size: 0.85rem;
-		font-weight: 600;
-		color: var(--c);
-		cursor: pointer;
-	}
-	footer {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		font-size: 0.8rem;
-		opacity: 0.75;
-	}
-	footer button {
-		border: none;
-		background: none;
-		color: var(--color-fg);
-		text-decoration: underline;
-		cursor: pointer;
-		font: inherit;
 	}
 </style>

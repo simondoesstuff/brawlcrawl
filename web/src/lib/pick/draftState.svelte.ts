@@ -7,6 +7,8 @@ import { Q_THRESHOLD } from './constants';
 import { overviewAnnotations, pickAnnotations, zScoreQ } from './annotations';
 import { loadEngine, getQValues, getTerminalPick6Scores, scoreMap, type DraftEngine } from './engine';
 import { fuzzyFind } from './fuzzy';
+import { resolveOwnedBrawlers } from './ownedBrawlers';
+import { ownedBrawlers } from './ownedBrawlersStore.svelte';
 import { banExcluded, displayExcluded, phaseDefaultFilter, phaseLabel, pickIsAlly } from './phase';
 import type { Brawler, EventMeta } from '../onnx/metadata';
 
@@ -41,19 +43,6 @@ export interface GridView {
 	finalMode: boolean;
 }
 
-const FILTER_STORAGE_KEY = 'brawl:filterIds';
-
-function loadStoredFilter(): Set<number> {
-	if (typeof localStorage === 'undefined') return new Set();
-	try {
-		const raw = localStorage.getItem(FILTER_STORAGE_KEY);
-		if (!raw) return new Set();
-		return new Set(JSON.parse(raw) as number[]);
-	} catch {
-		return new Set();
-	}
-}
-
 export class DraftState {
 	view = $state<View>('loading');
 	errorMsg = $state<string | null>(null);
@@ -70,7 +59,6 @@ export class DraftState {
 	enemyBans = $state<Brawler[]>([]);
 	picks = $state<DraftPick[]>([]);
 
-	filterIds = $state<Set<number>>(loadStoredFilter());
 	filterOn = $state(false);
 
 	qValues = $state<Float32Array | null>(null);
@@ -116,24 +104,10 @@ export class DraftState {
 		return pickIsAlly(5, this.allyFirst, this.turnSchedule);
 	}
 
-	private setFilterIds(next: Set<number>): void {
-		this.filterIds = next;
-		try {
-			localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([...next]));
-		} catch {
-			/* best-effort persistence only */
-		}
-	}
-
-	toggleOwned(brawlerId: number): void {
-		const next = new Set(this.filterIds);
-		if (next.has(brawlerId)) next.delete(brawlerId);
-		else next.add(brawlerId);
-		this.setFilterIds(next);
-	}
-
-	clearOwned(): void {
-		this.setFilterIds(new Set());
+	/** Owned brawler ids, resolved live from the settings page's comma-separated text. */
+	get filterIds(): Set<number> {
+		if (!this.engine) return new Set();
+		return resolveOwnedBrawlers(ownedBrawlers.text, this.engine.metadata.brawlers).ids;
 	}
 
 	selectMap(mapName: string): void {
