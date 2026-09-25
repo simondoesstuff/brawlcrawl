@@ -1,7 +1,9 @@
 // Deterministic PRNG for the Monte Carlo stress-test. Not cryptographic —
-// its only job is reproducible, *paired* random draws: seeding two RNGs
-// with the same (seed, trialIndex) reproduces the same event / coin-flip /
-// adversary-pool draws for a baseline set and a candidate-extended set, so
+// its only job is reproducible, *paired* action-sampling noise: seeding two
+// RNGs with the same (seed, trialIndex) reproduces the same sequence of
+// near-optimal action draws for a baseline set and a candidate-extended set
+// (the event and coin flip are stratified, not drawn — see trial.ts — so
+// this is the only remaining source of per-trial randomness), so
 // stressTest.ts can compare them as a paired sample (common random numbers)
 // instead of two independent ones.
 
@@ -84,17 +86,4 @@ export function sampleMaskedSoftmax(
 		weights[i] = mask[i] ? Math.exp((logits[i] - maxLogit) / temperature) : 0;
 	}
 	return sampleCategorical(weights, rng);
-}
-
-/** `k` distinct indices from [0, n), uniformly, without replacement (partial Fisher-Yates). */
-export function sampleWithoutReplacement(n: number, k: number, rng: Rng): number[] {
-	if (k < 0 || k > n) throw new Error(`sampleWithoutReplacement: k=${k} out of range for n=${n}`);
-	const pool = Array.from({ length: n }, (_, i) => i);
-	const out: number[] = [];
-	for (let i = 0; i < k; i++) {
-		const j = i + Math.floor(rng.next() * (n - i));
-		[pool[i], pool[j]] = [pool[j], pool[i]];
-		out.push(pool[i]);
-	}
-	return out;
 }

@@ -1,23 +1,9 @@
-// Pure logic test — uses a minimal fake DraftEngine (just the `metadata`
-// shape setupTrial reads) rather than loading real ONNX artifacts.
+// Pure logic test — no DraftEngine/ONNX involved, setupTrial only reads the
+// configured events list.
 
 import { describe, expect, test } from 'bun:test';
 import type { EventMeta } from '../onnx/metadata';
-import type { DraftEngine } from '../pick/engine';
 import { setupTrial } from './trial';
-
-function fakeEngine(nBrawlers: number, events: EventMeta[]): DraftEngine {
-	const brawlers = Array.from({ length: nBrawlers }, (_, i) => ({
-		id: 1000 + i,
-		name: `B${i}`,
-		class: 'Damage Dealer',
-		rarity: 'Rare',
-		char_idx: i
-	}));
-	return {
-		metadata: { brawlers, events, winrates: {}, pickrates: {} }
-	} as unknown as DraftEngine;
-}
 
 const EVENTS: EventMeta[] = [
 	{ id: 1, mode: 'Gem Grab', mode_id: 1, map_name: 'Map A', event_idx: 10, mode_idx: 1 },
@@ -25,59 +11,55 @@ const EVENTS: EventMeta[] = [
 ];
 
 describe('setupTrial', () => {
-	test('same (seed, trialIndex) reproduces identical event/allyFirst/adversary pool', () => {
-		const engine = fakeEngine(30, EVENTS);
-		const config = { events: EVENTS, adversaryPoolSize: 12 as number, seed: 42 };
-		const a = setupTrial(engine, config, 5);
-		const b = setupTrial(engine, config, 5);
+	test('same (seed, trialIndex) reproduces identical event/allyFirst', () => {
+		const config = { events: EVENTS, seed: 42 };
+		const a = setupTrial(config, 5);
+		const b = setupTrial(config, 5);
 		expect(a.event).toEqual(b.event);
 		expect(a.allyFirst).toBe(b.allyFirst);
-		expect([...a.adversaryPoolIds].sort()).toEqual([...b.adversaryPoolIds].sort());
 	});
 
-	test('different trialIndex generally differs', () => {
-		const engine = fakeEngine(30, EVENTS);
-		const config = { events: EVENTS, adversaryPoolSize: 12 as number, seed: 42 };
-		const results = Array.from({ length: 10 }, (_, i) => setupTrial(engine, config, i));
-		const distinctPools = new Set(results.map((r) => [...r.adversaryPoolIds].sort().join(',')));
-		expect(distinctPools.size).toBeGreaterThan(1);
-	});
-
-	test('fixed adversaryPoolSize always draws exactly that many distinct brawlers', () => {
-		const engine = fakeEngine(30, EVENTS);
-		for (let i = 0; i < 20; i++) {
-			const { adversaryPoolIds } = setupTrial(
-				engine,
-				{ events: EVENTS, adversaryPoolSize: 12, seed: 1 },
-				i
-			);
-			expect(adversaryPoolIds.size).toBe(12);
+	test('stratifies exactly: every (event, allyFirst) cell is hit exactly once over 2 * events.length trials', () => {
+		const config = { events: EVENTS, seed: 1 };
+		const nTrials = 2 * EVENTS.length;
+		const cells = Array.from({ length: nTrials }, (_, i) => {
+			const { event, allyFirst } = setupTrial(config, i);
+			return `${event.id}:${allyFirst}`;
+		});
+		expect(new Set(cells).size).toBe(nTrials);
+		for (const event of EVENTS) {
+			expect(cells).toContain(`${event.id}:true`);
+			expect(cells).toContain(`${event.id}:false`);
 		}
 	});
 
-	test('[min, max] adversaryPoolSize stays within range', () => {
-		const engine = fakeEngine(30, EVENTS);
-		for (let i = 0; i < 50; i++) {
-			const { adversaryPoolIds } = setupTrial(
-				engine,
-				{ events: EVENTS, adversaryPoolSize: [10, 15], seed: 2 },
-				i
-			);
-			expect(adversaryPoolIds.size).toBeGreaterThanOrEqual(10);
-			expect(adversaryPoolIds.size).toBeLessThanOrEqual(15);
+	test('stratification wraps around past 2 * events.length trials', () => {
+		const config = { events: EVENTS, seed: 1 };
+		const nTrials = 2 * EVENTS.length;
+		for (let i = 0; i < nTrials; i++) {
+			const a = setupTrial(config, i);
+			const b = setupTrial(config, i + nTrials);
+			expect(a.event).toEqual(b.event);
+			expect(a.allyFirst).toBe(b.allyFirst);
 		}
 	});
 
 	test('drawn event is always one of the configured events', () => {
-		const engine = fakeEngine(30, EVENTS);
+		const config = { events: EVENTS, seed: 3 };
 		for (let i = 0; i < 20; i++) {
-			const { event } = setupTrial(engine, { events: EVENTS, adversaryPoolSize: 5, seed: 3 }, i);
+			const { event } = setupTrial(config, i);
 			expect(EVENTS).toContainEqual(event);
 		}
 	});
 
+	test('the returned rng is independent per (seed, trialIndex) for action sampling', () => {
+		const config = { events: EVENTS, seed: 42 };
+		const a = setupTrial(config, 5);
+		const b = setupTrial(config, 6);
+		expect(a.rng.next()).not.toBe(b.rng.next());
+	});
+
 	test('throws on empty events list', () => {
-		const engine = fakeEngine(30, []);
-		expect(() => setupTrial(engine, { events: [], adversaryPoolSize: 5, seed: 1 }, 0)).toThrow();
+		expect(() => setupTrial({ events: [], seed: 1 }, 0)).toThrow();
 	});
 });

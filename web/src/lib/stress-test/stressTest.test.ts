@@ -85,23 +85,32 @@ describe('simulateOneDraft', () => {
 });
 
 describe('runAdversarialStressTest', () => {
-	const TRIALS = 16;
+	// A small explicit events list keeps `2 * events.length` small so these
+	// tests can use a small, valid (multiple-of-cellCount) trial count.
+	const EVENTS_SLICE = 4;
+	const TRIALS = 16; // 2 full stratification cycles over 4 events * 2 sides
 
 	test('baseline + candidate arms are well-formed and paired-comparable', async () => {
 		const engine = await loadRealEngine();
 		const brawlers = engine.metadata.brawlers;
+		const events = engine.metadata.events.slice(0, EVENTS_SLICE);
 		const ownedIds = brawlers.slice(0, 12).map((b) => b.id);
 		const candidateIds = brawlers.slice(12, 15).map((b) => b.id);
 
 		expect(estimateCallCount(engine, { ownedIds, candidateIds, trials: TRIALS })).toBe(
 			(1 + 3) * TRIALS * 13
 		);
+		// Default trials: DEFAULT_STRATIFICATION_CYCLES (8) samples per
+		// (event, allyFirst) stratification cell — see stressTest.ts's header.
+		expect(estimateCallCount(engine, { ownedIds, candidateIds, events })).toBe(
+			(1 + 3) * (8 * 2 * events.length) * 13
+		);
 
 		const result = await runAdversarialStressTest(engine, {
 			ownedIds,
 			candidateIds,
+			events,
 			trials: TRIALS,
-			adversaryPoolSize: [10, 15],
 			concurrency: 2,
 			seed: 9
 		});
@@ -127,8 +136,9 @@ describe('runAdversarialStressTest', () => {
 		// Common-random-numbers check: the paired delta's stderr should, on
 		// average, beat the naive independent-arms estimate
 		// sqrt(baseline.stderr^2 + candidate.stderr^2) — otherwise the shared
-		// per-trial draws (event, coin flip, adversary pool; see trial.ts)
-		// aren't actually reducing variance and the pairing is pointless.
+		// per-trial draws (stratified event/coin flip, and the action-sampling
+		// RNG stream; see trial.ts) aren't actually reducing variance and the
+		// pairing is pointless.
 		const naive = result.candidates.map((c) =>
 			Math.sqrt(result.baseline.stderr ** 2 + c.stderr ** 2)
 		);
@@ -141,13 +151,14 @@ describe('runAdversarialStressTest', () => {
 	test('is invariant to concurrency (no cross-talk between parallel session.run calls)', async () => {
 		const engine = await loadRealEngine();
 		const brawlers = engine.metadata.brawlers;
+		const events = engine.metadata.events.slice(0, EVENTS_SLICE);
 		const ownedIds = brawlers.slice(0, 10).map((b) => b.id);
 		const candidateIds = brawlers.slice(10, 12).map((b) => b.id);
 		const base = {
 			ownedIds,
 			candidateIds,
-			trials: 8,
-			adversaryPoolSize: [10, 15] as [number, number],
+			events,
+			trials: TRIALS,
 			seed: 17
 		};
 
@@ -174,5 +185,19 @@ describe('runAdversarialStressTest', () => {
 			threw = true;
 		}
 		expect(threw).toBe(true);
+	});
+
+	test('rejects a trials count that is not a multiple of 2 * events.length', async () => {
+		const engine = await loadRealEngine();
+		const ownedIds = engine.metadata.brawlers.slice(0, 5).map((b) => b.id);
+		const events = engine.metadata.events.slice(0, EVENTS_SLICE); // cellCount = 8
+		let error: unknown;
+		try {
+			await runAdversarialStressTest(engine, { ownedIds, events, trials: 5 });
+		} catch (e) {
+			error = e;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toMatch(/multiple of/);
 	});
 });

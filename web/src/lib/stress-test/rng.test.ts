@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import {
-	makeTrialRng,
-	sampleCategorical,
-	sampleMaskedSoftmax,
-	sampleWithoutReplacement
-} from './rng';
+import { makeTrialRng, sampleCategorical, sampleMaskedSoftmax } from './rng';
 
 describe('makeTrialRng', () => {
 	test('same (seed, trialIndex) reproduces the same draw sequence', () => {
@@ -85,34 +80,5 @@ describe('sampleMaskedSoftmax', () => {
 	test('throws when every position is masked out', () => {
 		const rng = makeTrialRng(4, 4);
 		expect(() => sampleMaskedSoftmax([1, 2, 3], [0, 0, 0], 0.5, rng)).toThrow();
-	});
-});
-
-describe('sampleWithoutReplacement', () => {
-	test('returns k distinct indices within range', () => {
-		const rng = makeTrialRng(5, 5);
-		const out = sampleWithoutReplacement(20, 7, rng);
-		expect(out.length).toBe(7);
-		expect(new Set(out).size).toBe(7);
-		for (const i of out) {
-			expect(i).toBeGreaterThanOrEqual(0);
-			expect(i).toBeLessThan(20);
-		}
-	});
-
-	test('k = n returns a permutation of everything', () => {
-		const rng = makeTrialRng(6, 6);
-		const out = sampleWithoutReplacement(5, 5, rng);
-		expect([...out].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]);
-	});
-
-	test('k = 0 returns empty', () => {
-		const rng = makeTrialRng(7, 7);
-		expect(sampleWithoutReplacement(5, 0, rng)).toEqual([]);
-	});
-
-	test('throws when k > n', () => {
-		const rng = makeTrialRng(8, 8);
-		expect(() => sampleWithoutReplacement(3, 4, rng)).toThrow();
 	});
 });
