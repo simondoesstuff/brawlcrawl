@@ -1,5 +1,7 @@
 """Tests for geneus.data — vocab building, battle loading, filtering."""
 
+import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -38,7 +40,7 @@ class TestVocabs:
         assert v1.class_to_idx == v2.class_to_idx
 
     def test_known_vocab_sizes(self, vocabs: Vocabs) -> None:
-        assert vocabs.n_events == 31
+        assert vocabs.n_events == 34
         assert vocabs.n_modes == 6
         assert vocabs.n_chars == 108
         assert vocabs.n_classes == 7
@@ -125,6 +127,62 @@ class TestWinrateLoading:
 
     def test_char_meta_shape(self, winrates: WinrateArrays) -> None:
         assert winrates.char_meta.shape == (len(winrates), 3)
+
+
+class TestUnknownEventGuard:
+    """A crawl dataset can get ahead of events.json (a newly-discovered event ID not
+    yet resolved to mode/map) — loaders must raise instead of silently dropping
+    those battles from training. See docs/dataset_generation.md."""
+
+    @pytest.fixture
+    def lagging_data_dir(self, tmp_path: Path) -> Path:
+        for name in ["brawler_class.json", "brawler_effective_range.json", "brawler_destruction.json"]:
+            _ = shutil.copy(DATA_DIR / name, tmp_path / name)
+
+        events: list[dict[str, object]] = json.loads((DATA_DIR / "events.json").read_text())
+        _ = (tmp_path / "events.json").write_text(json.dumps(events[1:]))  # drop events[0]
+        return tmp_path
+
+    def test_load_battles_raises_on_unknown_event(self, lagging_data_dir: Path) -> None:
+        vocabs = load_vocabs(lagging_data_dir)
+        with pytest.raises(ValueError, match="not in"):
+            _ = load_battles(lagging_data_dir, vocabs=vocabs, battles_file=DATA_DIR / "crawl_leg1_20260827.json")
+
+    def test_load_winrates_raises_on_unknown_event(self, lagging_data_dir: Path) -> None:
+        vocabs = load_vocabs(lagging_data_dir)
+        with pytest.raises(ValueError, match="not in"):
+            _ = load_winrates(
+                lagging_data_dir, vocabs=vocabs, winrates_file=DATA_DIR / "winrates_leg1_20260827.json"
+            )
+
+
+class TestUnknownCharGuard:
+    """A stats source can get ahead of brawler_class.json (a newly-released brawler
+    not yet added) — loaders must raise instead of silently dropping those entries
+    from training."""
+
+    @pytest.fixture
+    def lagging_data_dir(self, tmp_path: Path) -> Path:
+        # Drop the same brawler from all three metadata files, simulating a brand
+        # new brawler not yet added anywhere — as opposed to one file lagging
+        # behind the others, which `_build_char_meta_lookup` already catches.
+        _ = shutil.copy(DATA_DIR / "events.json", tmp_path / "events.json")
+        for name in ["brawler_class.json", "brawler_effective_range.json", "brawler_destruction.json"]:
+            data: list[dict[str, object]] = json.loads((DATA_DIR / name).read_text())
+            _ = (tmp_path / name).write_text(json.dumps(data[1:]))
+        return tmp_path
+
+    def test_load_battles_raises_on_unknown_char(self, lagging_data_dir: Path) -> None:
+        vocabs = load_vocabs(lagging_data_dir)
+        with pytest.raises(ValueError):
+            _ = load_battles(lagging_data_dir, vocabs=vocabs, battles_file=DATA_DIR / "crawl_leg1_20260827.json")
+
+    def test_load_winrates_raises_on_unknown_char(self, lagging_data_dir: Path) -> None:
+        vocabs = load_vocabs(lagging_data_dir)
+        with pytest.raises(ValueError, match="not in"):
+            _ = load_winrates(
+                lagging_data_dir, vocabs=vocabs, winrates_file=DATA_DIR / "winrates_leg1_20260827.json"
+            )
 
 
 class TestTrainValSplit:

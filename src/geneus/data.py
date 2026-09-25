@@ -166,6 +166,39 @@ def _build_char_meta_lookup(
     return {bid: (class_map[bid], range_map[bid], destruct_map[bid]) for bid in all_ids}
 
 
+def _check_events_known(event_ids: set[int], vocabs: Vocabs, source: Path, data_dir: Path) -> None:
+    """Raise if `source` references event IDs missing from events.json.
+
+    Loaders used to filter these out silently, which meant a crawl dataset
+    could get ahead of events.json (e.g. a newly-discovered event ID not yet
+    resolved to mode/map) and training would quietly drop those battles
+    instead of failing loudly. See docs/dataset_generation.md.
+    """
+    unknown = (event_ids - {0}) - set(vocabs.event_to_idx)
+    if unknown:
+        raise ValueError(
+            f"{source} references {len(unknown)} event ID(s) not in {data_dir / 'events.json'}: "
+            f"{sorted(unknown)}. Run `crawl events-crawl` to refresh events.json before training."
+        )
+
+
+def _check_chars_known(char_ids: set[int], vocabs: Vocabs, source: Path, data_dir: Path) -> None:
+    """Raise if `source` references brawler IDs missing from brawler_class.json.
+
+    Same failure mode as `_check_events_known`: a stats source can get ahead of
+    brawler_class.json (a newly-released brawler not yet added), and filtering
+    those entries out silently would quietly drop training data instead of
+    failing loudly.
+    """
+    unknown = char_ids - set(vocabs.char_to_idx)
+    if unknown:
+        raise ValueError(
+            f"{source} references {len(unknown)} brawler ID(s) not in {data_dir / 'brawler_class.json'}: "
+            f"{sorted(unknown)}. Update brawler_class.json (and brawler_effective_range.json / "
+            "brawler_destruction.json) before training."
+        )
+
+
 def load_battles(
     data_dir: Path = _DATA_DIR,
     *,
@@ -181,7 +214,8 @@ def load_battles(
     event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
 
     raw: dict = json.loads(battles_file.read_text())
-    battles: list[dict] = [b for b in raw["stats"] if b["event_id"] in vocabs.event_to_idx]
+    _check_events_known({b["event_id"] for b in raw["stats"]}, vocabs, battles_file, data_dir)
+    battles: list[dict] = raw["stats"]
 
     for b in battles:
         for cid in b["team_a"] + b["team_b"]:
@@ -243,19 +277,17 @@ def load_winrates(
     event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
 
     raw: list[dict] = json.loads(winrates_file.read_text())
-    entries = [
-        e for e in raw
-        if e["event_id"] in vocabs.event_to_idx and e["char_id"] in vocabs.char_to_idx
-    ]
+    _check_events_known({e["event_id"] for e in raw}, vocabs, winrates_file, data_dir)
+    _check_chars_known({e["char_id"] for e in raw}, vocabs, winrates_file, data_dir)
 
-    M = len(entries)
+    M = len(raw)
     event_idx = np.empty(M, dtype=np.int32)
     mode_idx = np.empty(M, dtype=np.int32)
     char_idx = np.empty(M, dtype=np.int32)
     char_meta_arr = np.empty((M, 3), dtype=np.int32)
     z_scores = np.empty(M, dtype=np.float32)
 
-    for i, e in enumerate(entries):
+    for i, e in enumerate(raw):
         eid = e["event_id"]
         cid = e["char_id"]
         event_idx[i] = vocabs.event_to_idx[eid]
