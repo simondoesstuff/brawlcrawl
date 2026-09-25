@@ -40,3 +40,6 @@ __pycache__
 /web/static/models
 /web/static/data
 /web/tests/fixtures
+.vercel
+.env
+.env.local
