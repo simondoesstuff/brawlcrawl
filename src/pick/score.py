@@ -208,6 +208,7 @@ def load_context(
     d_model: int = 64,
     n_heads: int = 4,
     n_layers: int = 2,
+    stats_leg: str = "leg1_20260827",
 ) -> DraftContext:
     vocabs = load_vocabs(data_dir)
 
@@ -275,12 +276,12 @@ def load_context(
                 mode_idx=vocabs.mode_to_idx[e["modeId"]],
             ))
 
-    winrates_raw: list[dict] = json.loads((data_dir / "winrates_leg1_20260827.json").read_text())
+    winrates_raw: list[dict] = json.loads((data_dir / f"winrates_{stats_leg}.json").read_text())
     winrates: dict[int, dict[int, float]] = {}
     for entry in winrates_raw:
         winrates.setdefault(entry["char_id"], {})[entry["event_id"]] = entry["z_score"]
 
-    pickrates_raw: list[dict] = json.loads((data_dir / "pickrates_leg1_20260827.json").read_text())
+    pickrates_raw: list[dict] = json.loads((data_dir / f"pickrates_{stats_leg}.json").read_text())
     pickrates: dict[int, dict[int, float]] = {}
     for entry in pickrates_raw:
         pickrates.setdefault(entry["char_id"], {})[entry["event_id"]] = entry["z_score"]

@@ -476,6 +476,7 @@ def main(
     d_model: Annotated[int, typer.Option(help="DraftQNetwork d_model")] = 64,
     n_heads: Annotated[int, typer.Option(help="DraftQNetwork attention heads")] = 4,
     n_layers: Annotated[int, typer.Option(help="DraftQNetwork transformer layers")] = 2,
+    stats_leg: Annotated[str, typer.Option(help="Crawl leg to source winrates_<leg>.json/pickrates_<leg>.json from")] = "leg1_20260827",
     models_out: Annotated[Path, typer.Option(help="ONNX output directory")] = Path("web/static/models"),
     data_out: Annotated[Path, typer.Option(help="Companion data output directory")] = Path("web/static/data"),
     metadata_out: Annotated[Path, typer.Option(help="Brawler/event/winrate/pickrate metadata output path")] = Path("web/static/data/metadata.json"),
@@ -489,6 +490,7 @@ def main(
         data_dir, terminal_ckpt, draft_ckpt,
         embed_dim=embed_dim, hidden_dim=hidden_dim,
         d_model=d_model, n_heads=n_heads, n_layers=n_layers,
+        stats_leg=stats_leg,
     )
 
     models_out.mkdir(parents=True, exist_ok=True)

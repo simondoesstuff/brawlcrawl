@@ -16,13 +16,15 @@ __pycache__
 !/data/crawl_myt2_20260916.json
 !/data/events.json
 
-# not cheap generated artifacts necessary for web
-!/data/tier_lists.json
-!/data/tier_lists_optimal.json
+# not cheap generated artifacts necessary for web (Monte Carlo tier lists
+# for the deployed crawl -- see workflow/Snakefile's `tier_lists`/
+# `tier_lists_optimal` rules, parameterized per-crawl)
+!/data/tier_lists_myt2_20260916.json
+!/data/tier_lists_optimal_myt2_20260916.json
 
-# winrates/pickrates are necessary for web but regenerated at
-# build time from crawl_leg1_20260827.json
-# (see `just web-data`), not committed
+# winrates/pickrates are necessary for web but regenerated at build time
+# from the deployed crawl's own battles file (see `just web-data`), not
+# committed
 
 # scraped from wiki
 !/data/brawler_class.json

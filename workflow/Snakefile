@@ -111,26 +111,16 @@ rule battlelog:
 rule tier_lists:
 	"""Monte Carlo per-map first-pick tier lists (random continuation), scored by the terminal BrawlModel."""
 	input:
-		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
-		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
+		terminal_ckpt="data/terminal_{crawl}/model.eqx",
+		draft_ckpt="data/draft_{crawl}/draft_q_best.eqx",
 		brawler_class="data/brawler_class.json",
 		brawler_range="data/brawler_effective_range.json",
 		brawler_destruction="data/brawler_destruction.json",
 		events="data/events.json",
 	output:
-		"data/tier_lists.json"
+		"data/tier_lists_{crawl}.json"
 	shell:
 		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --policy random --output {output}"
-
-
-rule tier_lists_web:
-	"""Copy the random-continuation tier lists into web/static for the tier-list UI."""
-	input:
-		"data/tier_lists.json"
-	output:
-		"web/static/data/tier_lists.json"
-	shell:
-		"cp {input} {output}"
 
 
 rule tier_lists_optimal:
@@ -143,41 +133,35 @@ rule tier_lists_optimal:
 	draft_q_best.eqx, trained on no-ban scenarios).
 	"""
 	input:
-		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
-		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
+		terminal_ckpt="data/terminal_{crawl}/model.eqx",
+		draft_ckpt="data/draft_{crawl}/draft_q_best.eqx",
 		brawler_class="data/brawler_class.json",
 		brawler_range="data/brawler_effective_range.json",
 		brawler_destruction="data/brawler_destruction.json",
 		events="data/events.json",
 	output:
-		"data/tier_lists_optimal.json"
+		"data/tier_lists_optimal_{crawl}.json"
 	shell:
 		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --policy optimal --output {output}"
 
 
-rule tier_lists_optimal_web:
-	"""Copy the optimal-continuation tier lists into web/static for the tier-list UI."""
-	input:
-		"data/tier_lists_optimal.json"
-	output:
-		"web/static/data/tier_lists_optimal.json"
-	shell:
-		"cp {input} {output}"
+rule draft_train:
+	"""Train the DraftQNetwork against a frozen terminal BrawlModel checkpoint.
 
-
-rule export_onnx:
-	"""Trace BrawlModel + DraftQNetwork to ONNX and write companion data for web/."""
+	Output is the single .eqx file downstream rules (tier_lists) actually
+	consume -- not directory("data/draft_{crawl}") -- because Snakemake wipes
+	a directory() output's entire contents before the job runs, which would
+	delete the live checkpoint on a rerun before training had produced its
+	replacement.
+	"""
 	input:
-		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
-		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
-		winrates="data/winrates_leg1_20260827.json",
-		pickrates="data/pickrates_leg1_20260827.json",
+		terminal_ckpt="data/terminal_{crawl}/model.eqx",
+		events="data/events.json",
+		brawler_class="data/brawler_class.json",
+		brawler_range="data/brawler_effective_range.json",
+		brawler_destruction="data/brawler_destruction.json",
 	output:
-		"web/static/models/draft_q.onnx",
-		"web/static/models/terminal_pick6.onnx",
-		"web/static/data/char_encs.bin",
-		"web/static/data/manifest.json",
-		"web/static/data/metadata.json",
-		"web/tests/fixtures/onnx_fixture.json",
+		"data/draft_{crawl}/draft_q_best.eqx"
 	shell:
-		"uv run export-onnx --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt}"
+		"just draft-train {input.terminal_ckpt} $(dirname {output})"
+
