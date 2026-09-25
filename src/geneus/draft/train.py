@@ -37,6 +37,7 @@ _OUT_DIR = Path("data/draft_model")
 _MODEL_FILENAME = "draft_q.eqx"
 _BEST_MODEL_FILENAME = "draft_q_best.eqx"
 _CHECKPOINTS_DIRNAME = "checkpoints"
+_EVAL_HISTORY_FILENAME = "eval_history.json"
 
 # Precomputed JAX constants for the Bellman backup
 _BELLMAN_SIGNS_JAX = jnp.array(BELLMAN_SIGNS)  # [11]
@@ -642,7 +643,8 @@ def train(
         typer.Option(
             help=(
                 "Output directory for training artifacts "
-                f"({_MODEL_FILENAME}, {_BEST_MODEL_FILENAME}, {_CHECKPOINTS_DIRNAME}/)"
+                f"({_MODEL_FILENAME}, {_BEST_MODEL_FILENAME}, "
+                f"{_EVAL_HISTORY_FILENAME}, {_CHECKPOINTS_DIRNAME}/)"
             )
         ),
     ] = _OUT_DIR,
@@ -688,7 +690,7 @@ def train(
     ] = 0.1,
     checkpoint_every: Annotated[
         int, typer.Option(help="Save checkpoint every N iters (0=off)")
-    ] = 5000,
+    ] = 400,
     log_every: Annotated[int, typer.Option(help="Log interval in iterations")] = 100,
     eval_every: Annotated[
         int, typer.Option(help="Win-rate-vs-random eval interval in iterations (0=off)")
@@ -767,6 +769,11 @@ def train(
     out.mkdir(parents=True, exist_ok=True)
     model_path = out / _MODEL_FILENAME  # latest weights, overwritten periodically
     best_model_path = out / _BEST_MODEL_FILENAME  # best win-rate-vs-random so far
+    # Rewritten in full on every eval (independent of --checkpoint-every), so
+    # the win-rate curve survives even a run that never hits a checkpoint
+    # boundary or is killed before one — no more depending on scrollback or
+    # manually piping stdout to a log file to recover this after the fact.
+    eval_history_path = out / _EVAL_HISTORY_FILENAME
     ckpt_dir = out / _CHECKPOINTS_DIRNAME
     if checkpoint_every > 0:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -794,8 +801,10 @@ def train(
     typer.echo(
         f"\nTraining iters {start_iter}–{n_iters} ({batch_episodes} episodes/step)..."
     )
+    last_iter = start_iter - 1
     pbar = tqdm(range(start_iter, n_iters + 1), desc="Draft RL", unit="iter")
     for i in pbar:
+        last_iter = i
         batch = simulate_batch(
             q_net,
             char_encs_all,
@@ -854,13 +863,19 @@ def train(
                 eval_temp=eval_temp,
             )
             eval_history.append({"iteration": i, **eval_results})
+            eval_history_path.write_text(json.dumps(eval_history, indent=2))
             pbar.write(
                 f"  [eval @ iter {i}] "
                 f"win_A={eval_results['win_rate_as_a']:.3f}  "
                 f"win_B={eval_results['win_rate_as_b']:.3f}  "
                 f"combined={eval_results['win_rate_combined']:.3f}"
             )
-            if eval_results["win_rate_combined"] > best_win_rate:
+            if eval_results["win_rate_combined"] >= best_win_rate:
+                # >= (not >): on a tie, prefer the later checkpoint. Loss can
+                # keep improving (and, as observed, A/B balance can keep
+                # shifting) after win-rate-vs-random saturates, so the latest
+                # checkpoint at a given win rate is generally a better pick
+                # than the first one to reach it.
                 best_win_rate = eval_results["win_rate_combined"]
                 eqx.tree_serialise_leaves(best_model_path, q_net)
 
@@ -874,6 +889,31 @@ def train(
         typer.echo(
             "No periodic eval ran (--eval-every 0) — no best-win-rate checkpoint saved"
         )
+
+    # Guarantee a full, resumable checkpoint exists at the end of every run
+    # that made progress — previously a run whose n_iters wasn't a multiple
+    # of checkpoint_every (e.g. a short run, or one stopped early) ended up
+    # with only the weights-only draft_q.eqx/draft_q_best.eqx at the output
+    # root and nothing in checkpoints/ at all. Skip if the last iteration was
+    # already saved on the checkpoint_every boundary above (avoid a
+    # redundant duplicate write).
+    if (
+        checkpoint_every > 0
+        and last_iter >= start_iter
+        and last_iter % checkpoint_every != 0
+    ):
+        final_ckpt_dir = ckpt_dir / f"ckpt_{last_iter:07d}"
+        save_checkpoint(
+            final_ckpt_dir,
+            q_net,
+            opt_state,
+            rng,
+            last_iter,
+            loss_history,
+            best_win_rate,
+            eval_history,
+        )
+        typer.echo(f"Final checkpoint  →  {final_ckpt_dir}")
 
 
 def _load_terminal_model_and_encs(
