@@ -187,7 +187,7 @@ rule battlelog:
 
 
 rule tier_lists:
-	"""Monte Carlo per-map first-pick tier lists, scored by the terminal BrawlModel."""
+	"""Monte Carlo per-map first-pick tier lists (random continuation), scored by the terminal BrawlModel."""
 	input:
 		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
 		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
@@ -198,15 +198,47 @@ rule tier_lists:
 	output:
 		"data/tier_lists.json"
 	shell:
-		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --output {output}"
+		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --policy random --output {output}"
 
 
 rule tier_lists_web:
-	"""Copy the Monte Carlo tier lists into web/static for the tier-list UI."""
+	"""Copy the random-continuation tier lists into web/static for the tier-list UI."""
 	input:
 		"data/tier_lists.json"
 	output:
 		"web/static/data/tier_lists.json"
+	shell:
+		"cp {input} {output}"
+
+
+rule tier_lists_optimal:
+	"""Monte Carlo per-map first-pick tier lists (DraftQNetwork-optimal continuation).
+
+	Same first-pick question as `tier_lists`, but the other five picks are
+	drafted by the deployed draft model instead of uniformly at random --
+	answers "what's my win rate if this brawler is my first pick and everyone
+	else, on both teams, drafts well." No bans (in-distribution for
+	draft_q_best.eqx, trained on no-ban scenarios).
+	"""
+	input:
+		terminal_ckpt="data/terminal_myt2_20260916/model.eqx",
+		draft_ckpt="data/draft_myt2_20260916/draft_q_best.eqx",
+		brawler_class="data/brawler_class.json",
+		brawler_range="data/brawler_effective_range.json",
+		brawler_destruction="data/brawler_destruction.json",
+		events="data/events.json",
+	output:
+		"data/tier_lists_optimal.json"
+	shell:
+		"uv run tier-list --terminal-ckpt {input.terminal_ckpt} --draft-ckpt {input.draft_ckpt} --policy optimal --output {output}"
+
+
+rule tier_lists_optimal_web:
+	"""Copy the optimal-continuation tier lists into web/static for the tier-list UI."""
+	input:
+		"data/tier_lists_optimal.json"
+	output:
+		"web/static/data/tier_lists_optimal.json"
 	shell:
 		"cp {input} {output}"
 

@@ -91,6 +91,50 @@ def _terminal_score_pick6_batch(
     return jax.vmap(score_one)(cand_chars, cand_meta)
 
 
+@eqx.filter_jit
+def q_values_batch(
+    q_net: DraftQNetwork,
+    char_encs: jax.Array,      # [n_chars, h] -- shared across the batch (single event)
+    player_states: jax.Array,  # [B, n_chars]
+    turn_token: jax.Array,     # [] -- shared across the batch (single turn)
+) -> jax.Array:  # [B, n_chars]
+    """Q-values for a batch of observations that share one event and one turn.
+
+    Used by full-draft Monte Carlo rollouts, where many independent drafts are
+    simulated in lockstep and each step queries the same acting-team turn.
+    """
+    return jax.vmap(lambda obs: q_net(char_encs, obs, turn_token))(player_states)
+
+
+@eqx.filter_jit
+def terminal_logits_grid(
+    terminal_model: BrawlModel,
+    event_idx: jax.Array,             # []
+    mode_idx: jax.Array,              # []
+    team_a_chars: jax.Array,          # [B, 3]
+    team_a_meta: jax.Array,           # [B, 3, 3]
+    team_b_partial_chars: jax.Array,  # [B, 2]
+    team_b_partial_meta: jax.Array,   # [B, 2, 3]
+    cand_chars: jax.Array,            # [n] -- same candidate grid for every row
+    cand_meta: jax.Array,             # [n, 3]
+) -> jax.Array:  # [B, n] logits, team-A-wins perspective
+    """Score every candidate as team B's last pick, for a batch of independent
+    partial drafts that each already have their own team A and team B roster.
+
+    Used to pick team B's exact optimal final pick across many simultaneously
+    simulated drafts: the last pick has no further draft to look ahead
+    through, so the terminal model itself is the correct read (matches
+    `get_terminal_pick6_scores`, batched over rows instead of one draft).
+    """
+    def score_row(ta_c, ta_m, tb_c, tb_m):
+        def score_one(c, m):
+            b_chars = jnp.concatenate([tb_c, c[None]])
+            b_meta = jnp.concatenate([tb_m, m[None]])
+            return terminal_model(event_idx, mode_idx, ta_c, ta_m, b_chars, b_meta)
+        return jax.vmap(score_one)(cand_chars, cand_meta)
+    return jax.vmap(score_row)(team_a_chars, team_a_meta, team_b_partial_chars, team_b_partial_meta)
+
+
 def _build_obs(
     n_chars: int,
     ally_bans: list[BrawlerInfo],

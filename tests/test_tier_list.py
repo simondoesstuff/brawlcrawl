@@ -9,10 +9,13 @@ from geneus.draft.model import DraftQNetwork
 from geneus.model import BrawlModel
 from pick.score import BrawlerInfo, DraftContext, EventInfo
 from pick.tier_list import (
-    _rank_correlation,
     _sample_permutations,
+    _sample_rows,
     _simulate_batch,
+    _simulate_optimal_batch,
+    _softmax_rows,
     run_map_trials,
+    run_map_trials_optimal,
 )
 
 N_CHARS = 12
@@ -83,18 +86,6 @@ def test_simulate_batch_covers_almost_every_brawler(ctx: DraftContext) -> None:
     assert set(cand_idx.tolist()) == set(range(N_CHARS))
 
 
-def test_rank_correlation_requires_two_checkpoints() -> None:
-    curr = np.array([0.1, 0.2, 0.3])
-    counted = np.array([True, True, True])
-    assert _rank_correlation(None, None, curr, counted) == 0.0
-
-
-def test_rank_correlation_perfect_when_identical() -> None:
-    vals = np.array([0.1, 0.5, 0.3, 0.9])
-    counted = np.array([True, True, True, True])
-    assert _rank_correlation(vals, counted, vals, counted) == pytest.approx(1.0)
-
-
 def test_run_map_trials_converges_and_ranks_all_brawlers(ctx: DraftContext) -> None:
     rng = np.random.default_rng(0)
     result = run_map_trials(
@@ -103,5 +94,51 @@ def test_run_map_trials_converges_and_ranks_all_brawlers(ctx: DraftContext) -> N
         min_trials=1, max_trials=5_000,
     )
     assert result.converged
+    assert np.all(result.samples > 0)
+    assert np.all((result.win_rate >= 0.0) & (result.win_rate <= 1.0))
+
+
+def test_softmax_rows_sums_to_one() -> None:
+    x = np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]])
+    probs = _softmax_rows(x)
+    assert np.allclose(probs.sum(axis=-1), 1.0)
+
+
+def test_softmax_rows_ignores_masked_out_columns() -> None:
+    x = np.array([[1.0, -np.inf, -np.inf]])
+    probs = _softmax_rows(x)
+    assert probs[0, 0] == pytest.approx(1.0)
+    assert probs[0, 1] == 0.0
+    assert probs[0, 2] == 0.0
+
+
+def test_sample_rows_respects_degenerate_distribution() -> None:
+    rng = np.random.default_rng(0)
+    probs = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    actions = _sample_rows(rng, probs)
+    assert list(actions) == [0, 1]
+
+
+def test_simulate_optimal_batch_every_brawler_scored_every_trial(ctx: DraftContext) -> None:
+    rng = np.random.default_rng(0)
+    n_trials = 3
+    cand_idx, probs = _simulate_optimal_batch(ctx, ctx.events[0], rng, n_trials, eval_temp=0.1)
+
+    assert cand_idx.shape == (n_trials * N_CHARS,)
+    assert probs.shape == cand_idx.shape
+    assert np.all((probs >= 0.0) & (probs <= 1.0))
+    # unlike the random policy's shared-continuation trick, every candidate is
+    # scored on every trial (no batching-induced exclusion)
+    counts = np.bincount(cand_idx, minlength=N_CHARS)
+    assert np.all(counts == n_trials)
+
+
+def test_run_map_trials_optimal_ranks_all_brawlers(ctx: DraftContext) -> None:
+    rng = np.random.default_rng(0)
+    result = run_map_trials_optimal(
+        ctx, ctx.events[0], rng,
+        batch_size=4, check_every=1, patience=2, threshold=0.9,
+        min_trials=1, max_trials=200,
+    )
     assert np.all(result.samples > 0)
     assert np.all((result.win_rate >= 0.0) & (result.win_rate <= 1.0))

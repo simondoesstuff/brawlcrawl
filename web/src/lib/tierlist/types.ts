@@ -1,6 +1,9 @@
-// Types for web/static/data/tier_lists.json, written by `uv run tier-list`
+// Types for web/static/data/tier_lists.json and tier_lists_optimal.json,
+// written by `uv run tier-list --policy {random,optimal}`
 // (src/pick/tier_list.py::_map_result_to_json) and copied into place by the
-// `tier_lists_web` Snakemake rule. `tier_list` is pre-sorted by win_rate desc.
+// `tier_lists_web` / `tier_lists_optimal_web` Snakemake rules. `tier_list` is
+// pre-sorted by win_rate desc. `policy` distinguishes the two files: "random"
+// (uniform continuation) vs "optimal" (DraftQNetwork continuation).
 
 export interface TierEntry {
 	brawler_id: number;
@@ -19,5 +22,6 @@ export interface MapTierList {
 }
 
 export interface TierListsData {
+	policy: 'random' | 'optimal';
 	maps: MapTierList[];
 }
