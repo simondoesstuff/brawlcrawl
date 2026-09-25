@@ -1,0 +1,188 @@
+[
+  {
+    "id": 15000005,
+    "mode": "bounty",
+    "modeId": 3,
+    "map": "Shooting Star"
+  },
+  {
+    "id": 15000007,
+    "mode": "gemGrab",
+    "modeId": 0,
+    "map": "Hard Rock Mine"
+  },
+  {
+    "id": 15000009,
+    "mode": "gemGrab",
+    "modeId": 0,
+    "map": "Deathcap Trap"
+  },
+  {
+    "id": 15000010,
+    "mode": "gemGrab",
+    "modeId": 0,
+    "map": "Gem Fort"
+  },
+  {
+    "id": 15000011,
+    "mode": "gemGrab",
+    "modeId": 0,
+    "map": "Undermine"
+  },
+  {
+    "id": 15000018,
+    "mode": "heist",
+    "modeId": 2,
+    "map": "Kaboom Canyon"
+  },
+  {
+    "id": 15000019,
+    "mode": "heist",
+    "modeId": 2,
+    "map": "Safe Zone"
+  },
+  {
+    "id": 15000022,
+    "mode": "bounty",
+    "modeId": 3,
+    "map": "Hideout"
+  },
+  {
+    "id": 15000025,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Triple Dribble"
+  },
+  {
+    "id": 15000026,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Pinhole Punt"
+  },
+  {
+    "id": 15000050,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Sneaky Fields"
+  },
+  {
+    "id": 15000053,
+    "mode": "heist",
+    "modeId": 2,
+    "map": "Hot Potato"
+  },
+  {
+    "id": 15000072,
+    "mode": "heist",
+    "modeId": 2,
+    "map": "Bridge Too Far"
+  },
+  {
+    "id": 15000082,
+    "mode": "bounty",
+    "modeId": 3,
+    "map": "Layer Cake"
+  },
+  {
+    "id": 15000083,
+    "mode": "bounty",
+    "modeId": 3,
+    "map": "Dry Season"
+  },
+  {
+    "id": 15000115,
+    "mode": "gemGrab",
+    "modeId": 0,
+    "map": "Double Swoosh"
+  },
+  {
+    "id": 15000118,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Pinball Dreams"
+  },
+  {
+    "id": 15000132,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Center Stage"
+  },
+  {
+    "id": 15000137,
+    "mode": "heist",
+    "modeId": 2,
+    "map": "Pit Stop"
+  },
+  {
+    "id": 15000143,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Beach Ball"
+  },
+  {
+    "id": 15000292,
+    "mode": "hotZone",
+    "modeId": 17,
+    "map": "Open Business"
+  },
+  {
+    "id": 15000293,
+    "mode": "hotZone",
+    "modeId": 17,
+    "map": "Parallel Plays"
+  },
+  {
+    "id": 15000300,
+    "mode": "hotZone",
+    "modeId": 17,
+    "map": "Ring of Fire"
+  },
+  {
+    "id": 15000306,
+    "mode": "hotZone",
+    "modeId": 17,
+    "map": "Dueling Beetles"
+  },
+  {
+    "id": 15000343,
+    "mode": "gemGrab",
+    "modeId": 0,
+    "map": "Rustic Arcade"
+  },
+  {
+    "id": 15000368,
+    "mode": "knockout",
+    "modeId": 20,
+    "map": "Belle's Rock"
+  },
+  {
+    "id": 15000440,
+    "mode": "knockout",
+    "modeId": 20,
+    "map": "Flaring Phoenix"
+  },
+  {
+    "id": 15000548,
+    "mode": "knockout",
+    "modeId": 20,
+    "map": "Out in the Open"
+  },
+  {
+    "id": 15000703,
+    "mode": "knockout",
+    "modeId": 20,
+    "map": "New Horizons"
+  },
+  {
+    "id": 15000886,
+    "mode": "heist",
+    "modeId": 2,
+    "map": "Safe(r) Zone"
+  },
+  {
+    "id": 15001021,
+    "mode": "brawlBall",
+    "modeId": 5,
+    "map": "Spiraling Out"
+  }
+]

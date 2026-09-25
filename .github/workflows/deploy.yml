@@ -1,0 +1,44 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - run: uv sync
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: extractions/setup-just@v3
+
+      # Populates web/static/{data,models} from the checkpoints, stats, and
+      # precomputed tier lists committed in data/ -- no snakemake, no crawl,
+      # no retraining. See justfile's `web-data` recipe for why.
+      - name: Generate web build inputs
+        run: just web-data
+
+      - name: Deploy to Vercel
+        working-directory: web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          bunx vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+          bunx vercel@latest build --prod --token="$VERCEL_TOKEN"
+          bunx vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"

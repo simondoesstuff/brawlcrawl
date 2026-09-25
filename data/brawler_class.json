@@ -1,0 +1,866 @@
+[
+  {
+    "id": 16000000,
+    "name": "SHELLY",
+    "class": "Damage Dealer",
+    "rarity": "Starting Brawler",
+    "max_attack_range": 10.0,
+    "max_super_range": 7.67
+  },
+  {
+    "id": 16000001,
+    "name": "COLT",
+    "class": "Damage Dealer",
+    "rarity": "Rare",
+    "max_attack_range": 10.0,
+    "max_super_range": 11.0
+  },
+  {
+    "id": 16000002,
+    "name": "BULL",
+    "class": "Tank",
+    "rarity": "Rare",
+    "max_attack_range": 5.33,
+    "max_super_range": 11.0
+  },
+  {
+    "id": 16000003,
+    "name": "BROCK",
+    "class": "Marksman",
+    "rarity": "Rare",
+    "max_attack_range": 11.0,
+    "max_super_range": 8.33
+  },
+  {
+    "id": 16000004,
+    "name": "RICO",
+    "class": "Damage Dealer",
+    "rarity": "Super Rare",
+    "max_attack_range": 9.67,
+    "max_super_range": 13.33
+  },
+  {
+    "id": 16000005,
+    "name": "SPIKE",
+    "class": "Damage Dealer",
+    "rarity": "Legendary",
+    "max_attack_range": 7.67,
+    "max_super_range": 7.67
+  },
+  {
+    "id": 16000006,
+    "name": "BARLEY",
+    "class": "Artillery",
+    "rarity": "Rare",
+    "max_attack_range": 7.33,
+    "max_super_range": 9.33
+  },
+  {
+    "id": 16000007,
+    "name": "JESSIE",
+    "class": "Controller",
+    "rarity": "Super Rare",
+    "max_attack_range": 9.0,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000008,
+    "name": "NITA",
+    "class": "Damage Dealer",
+    "rarity": "Rare",
+    "max_attack_range": 6.67,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000009,
+    "name": "DYNAMIKE",
+    "class": "Artillery",
+    "rarity": "Super Rare",
+    "max_attack_range": 7.33,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000010,
+    "name": "EL PRIMO",
+    "class": "Tank",
+    "rarity": "Rare",
+    "max_attack_range": 3.0,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000011,
+    "name": "MORTIS",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 4.67,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000012,
+    "name": "CROW",
+    "class": "Assassin",
+    "rarity": "Legendary",
+    "max_attack_range": 8.67,
+    "max_super_range": 8.67
+  },
+  {
+    "id": 16000013,
+    "name": "POCO",
+    "class": "Support",
+    "rarity": "Rare",
+    "max_attack_range": 7.0,
+    "max_super_range": 9.33
+  },
+  {
+    "id": 16000014,
+    "name": "BO",
+    "class": "Controller",
+    "rarity": "Epic",
+    "max_attack_range": 8.67,
+    "max_super_range": 8.67
+  },
+  {
+    "id": 16000015,
+    "name": "PIPER",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 11.67,
+    "max_super_range": 8.67
+  },
+  {
+    "id": 16000016,
+    "name": "PAM",
+    "class": "Support",
+    "rarity": "Epic",
+    "max_attack_range": 9.0,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000017,
+    "name": "TARA",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 8.0,
+    "max_super_range": 6.67
+  },
+  {
+    "id": 16000018,
+    "name": "DARRYL",
+    "class": "Tank",
+    "rarity": "Super Rare",
+    "max_attack_range": 6.0,
+    "max_super_range": 7.0
+  },
+  {
+    "id": 16000019,
+    "name": "PENNY",
+    "class": "Controller",
+    "rarity": "Super Rare",
+    "max_attack_range": 8.67,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000020,
+    "name": "FRANK",
+    "class": "Tank",
+    "rarity": "Epic",
+    "max_attack_range": 6.0,
+    "max_super_range": 7.0
+  },
+  {
+    "id": 16000021,
+    "name": "GENE",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 11.33,
+    "max_super_range": 8.67
+  },
+  {
+    "id": 16000022,
+    "name": "TICK",
+    "class": "Artillery",
+    "rarity": "Super Rare",
+    "max_attack_range": 8.67,
+    "max_super_range": 3.33
+  },
+  {
+    "id": 16000023,
+    "name": "LEON",
+    "class": "Assassin",
+    "rarity": "Legendary",
+    "max_attack_range": 9.67,
+    "max_super_range": null
+  },
+  {
+    "id": 16000024,
+    "name": "ROSA",
+    "class": "Tank",
+    "rarity": "Rare",
+    "max_attack_range": 3.67,
+    "max_super_range": null
+  },
+  {
+    "id": 16000025,
+    "name": "CARL",
+    "class": "Damage Dealer",
+    "rarity": "Super Rare",
+    "max_attack_range": 8.33,
+    "max_super_range": 2.33
+  },
+  {
+    "id": 16000026,
+    "name": "BIBI",
+    "class": "Tank",
+    "rarity": "Epic",
+    "max_attack_range": 3.67,
+    "max_super_range": 40.0
+  },
+  {
+    "id": 16000027,
+    "name": "8-BIT",
+    "class": "Damage Dealer",
+    "rarity": "Super Rare",
+    "max_attack_range": 10.0,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000028,
+    "name": "SANDY",
+    "class": "Controller",
+    "rarity": "Legendary",
+    "max_attack_range": 6.0,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000029,
+    "name": "BEA",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 10.0,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000030,
+    "name": "EMZ",
+    "class": "Controller",
+    "rarity": "Epic",
+    "max_attack_range": 6.67,
+    "max_super_range": 5.67
+  },
+  {
+    "id": 16000031,
+    "name": "MR. P",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 10.33,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000032,
+    "name": "MAX",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 8.33,
+    "max_super_range": 4.0
+  },
+  {
+    "id": 16000034,
+    "name": "JACKY",
+    "class": "Tank",
+    "rarity": "Super Rare",
+    "max_attack_range": 3.33,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000035,
+    "name": "GALE",
+    "class": "Controller",
+    "rarity": "Epic",
+    "max_attack_range": 8.33,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000036,
+    "name": "NANI",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 11.67,
+    "max_super_range": 58.33
+  },
+  {
+    "id": 16000037,
+    "name": "SPROUT",
+    "class": "Artillery",
+    "rarity": "Mythic",
+    "max_attack_range": 8.33,
+    "max_super_range": 7.67
+  },
+  {
+    "id": 16000038,
+    "name": "SURGE",
+    "class": "Damage Dealer",
+    "rarity": "Legendary",
+    "max_attack_range": 10.67,
+    "max_super_range": 5.33
+  },
+  {
+    "id": 16000039,
+    "name": "COLETTE",
+    "class": "Damage Dealer",
+    "rarity": "Epic",
+    "max_attack_range": 8.67,
+    "max_super_range": 11.0
+  },
+  {
+    "id": 16000040,
+    "name": "AMBER",
+    "class": "Controller",
+    "rarity": "Legendary",
+    "max_attack_range": 8.33,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000041,
+    "name": "LOU",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 9.33,
+    "max_super_range": 7.67
+  },
+  {
+    "id": 16000042,
+    "name": "BYRON",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 10.0,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000043,
+    "name": "EDGAR",
+    "class": "Assassin",
+    "rarity": "Epic",
+    "max_attack_range": 4.0,
+    "max_super_range": 6.67
+  },
+  {
+    "id": 16000044,
+    "name": "RUFFS",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 9.0,
+    "max_super_range": 7.67
+  },
+  {
+    "id": 16000045,
+    "name": "STU",
+    "class": "Assassin",
+    "rarity": "Epic",
+    "max_attack_range": 7.67,
+    "max_super_range": 4.0
+  },
+  {
+    "id": 16000046,
+    "name": "BELLE",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 10.0,
+    "max_super_range": 10.67
+  },
+  {
+    "id": 16000047,
+    "name": "SQUEAK",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 15.33,
+    "max_super_range": 13.33
+  },
+  {
+    "id": 16000048,
+    "name": "GROM",
+    "class": "Artillery",
+    "rarity": "Epic",
+    "max_attack_range": 11.0,
+    "max_super_range": 14.0
+  },
+  {
+    "id": 16000049,
+    "name": "BUZZ",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 2.67,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000050,
+    "name": "GRIFF",
+    "class": "Controller",
+    "rarity": "Epic",
+    "max_attack_range": 8.33,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000051,
+    "name": "ASH",
+    "class": "Tank",
+    "rarity": "Epic",
+    "max_attack_range": 4.67,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000052,
+    "name": "MEG",
+    "class": "Tank",
+    "rarity": "Legendary",
+    "max_attack_range": 9.0,
+    "max_super_range": 6.67
+  },
+  {
+    "id": 16000053,
+    "name": "LOLA",
+    "class": "Damage Dealer",
+    "rarity": "Epic",
+    "max_attack_range": 9.0,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000054,
+    "name": "FANG",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 9.33,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000056,
+    "name": "EVE",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 9.33,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000057,
+    "name": "JANET",
+    "class": "Marksman",
+    "rarity": "Mythic",
+    "max_attack_range": 8.33,
+    "max_super_range": 2.67
+  },
+  {
+    "id": 16000058,
+    "name": "BONNIE",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 9.0,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000059,
+    "name": "OTIS",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 9.0,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000060,
+    "name": "SAM",
+    "class": "Assassin",
+    "rarity": "Epic",
+    "max_attack_range": 3.0,
+    "max_super_range": 8.67
+  },
+  {
+    "id": 16000061,
+    "name": "GUS",
+    "class": "Support",
+    "rarity": "Super Rare",
+    "max_attack_range": 9.33,
+    "max_super_range": 9.33
+  },
+  {
+    "id": 16000062,
+    "name": "BUSTER",
+    "class": "Tank",
+    "rarity": "Mythic",
+    "max_attack_range": 5.33,
+    "max_super_range": 3.0
+  },
+  {
+    "id": 16000063,
+    "name": "CHESTER",
+    "class": "Damage Dealer",
+    "rarity": "Legendary",
+    "max_attack_range": 8.33,
+    "max_super_range": 6.33
+  },
+  {
+    "id": 16000064,
+    "name": "GRAY",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 9.0,
+    "max_super_range": 6.67
+  },
+  {
+    "id": 16000065,
+    "name": "MANDY",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 12.0,
+    "max_super_range": 40.0
+  },
+  {
+    "id": 16000066,
+    "name": "R-T",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 10.0,
+    "max_super_range": null
+  },
+  {
+    "id": 16000067,
+    "name": "WILLOW",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 7.33,
+    "max_super_range": 8.33
+  },
+  {
+    "id": 16000068,
+    "name": "MAISIE",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 8.67,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000069,
+    "name": "HANK",
+    "class": "Tank",
+    "rarity": "Epic",
+    "max_attack_range": 3.33,
+    "max_super_range": 30.0
+  },
+  {
+    "id": 16000070,
+    "name": "CORDELIUS",
+    "class": "Assassin",
+    "rarity": "Legendary",
+    "max_attack_range": 5.33,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000071,
+    "name": "DOUG",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 3.33,
+    "max_super_range": 9.33
+  },
+  {
+    "id": 16000072,
+    "name": "PEARL",
+    "class": "Damage Dealer",
+    "rarity": "Epic",
+    "max_attack_range": 9.0,
+    "max_super_range": 3.33
+  },
+  {
+    "id": 16000073,
+    "name": "CHUCK",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 6.0,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000074,
+    "name": "CHARLIE",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 9.0,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000075,
+    "name": "MICO",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 5.33,
+    "max_super_range": null
+  },
+  {
+    "id": 16000076,
+    "name": "KIT",
+    "class": "Support",
+    "rarity": "Legendary",
+    "max_attack_range": 10.0,
+    "max_super_range": 6.67
+  },
+  {
+    "id": 16000077,
+    "name": "LARRY & LAWRIE",
+    "class": "Artillery",
+    "rarity": "Epic",
+    "max_attack_range": 7.33,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000078,
+    "name": "MELODIE",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 8.0,
+    "max_super_range": 5.33
+  },
+  {
+    "id": 16000079,
+    "name": "ANGELO",
+    "class": "Marksman",
+    "rarity": "Epic",
+    "max_attack_range": 10.0,
+    "max_super_range": 2.33
+  },
+  {
+    "id": 16000080,
+    "name": "DRACO",
+    "class": "Tank",
+    "rarity": "Legendary",
+    "max_attack_range": 4.0,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000081,
+    "name": "LILY",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 2.0,
+    "max_super_range": 9.0
+  },
+  {
+    "id": 16000082,
+    "name": "BERRY",
+    "class": "Support",
+    "rarity": "Epic",
+    "max_attack_range": 6.33,
+    "max_super_range": 8.33
+  },
+  {
+    "id": 16000083,
+    "name": "CLANCY",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 7.67,
+    "max_super_range": 8.33
+  },
+  {
+    "id": 16000084,
+    "name": "MOE",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 7.67,
+    "max_super_range": 10.67
+  },
+  {
+    "id": 16000085,
+    "name": "KENJI",
+    "class": "Assassin",
+    "rarity": "Legendary",
+    "max_attack_range": 3.67,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000086,
+    "name": "SHADE",
+    "class": "Assassin",
+    "rarity": "Epic",
+    "max_attack_range": 5.33,
+    "max_super_range": 3.33
+  },
+  {
+    "id": 16000087,
+    "name": "JUJU",
+    "class": "Artillery",
+    "rarity": "Mythic",
+    "max_attack_range": 9.0,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000089,
+    "name": "MEEPLE",
+    "class": "Controller",
+    "rarity": "Epic",
+    "max_attack_range": 7.67,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000090,
+    "name": "OLLIE",
+    "class": "Tank",
+    "rarity": "Mythic",
+    "max_attack_range": 6.33,
+    "max_super_range": 6.67
+  },
+  {
+    "id": 16000091,
+    "name": "LUMI",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 8.0,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000092,
+    "name": "FINX",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 8.33,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000093,
+    "name": "JAE-YONG",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 8.33,
+    "max_super_range": 4.17
+  },
+  {
+    "id": 16000094,
+    "name": "KAZE",
+    "class": "Assassin",
+    "rarity": "Ultra",
+    "max_attack_range": null,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000095,
+    "name": "ALLI",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 3.67,
+    "max_super_range": null
+  },
+  {
+    "id": 16000096,
+    "name": "TRUNK",
+    "class": "Tank",
+    "rarity": "Epic",
+    "max_attack_range": 3.33,
+    "max_super_range": 7.0
+  },
+  {
+    "id": 16000097,
+    "name": "MINA",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 8.0,
+    "max_super_range": 7.0
+  },
+  {
+    "id": 16000098,
+    "name": "ZIGGY",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 7.33,
+    "max_super_range": 13.33
+  },
+  {
+    "id": 16000099,
+    "name": "PIERCE",
+    "class": "Marksman",
+    "rarity": "Legendary",
+    "max_attack_range": 10.0,
+    "max_super_range": 8.33
+  },
+  {
+    "id": 16000100,
+    "name": "GIGI",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 2.33,
+    "max_super_range": 7.33
+  },
+  {
+    "id": 16000101,
+    "name": "GLOWY",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 7.33,
+    "max_super_range": 5.67
+  },
+  {
+    "id": 16000102,
+    "name": "SIRIUS",
+    "class": "Controller",
+    "rarity": "Ultra",
+    "max_attack_range": 7.33,
+    "max_super_range": 10.0
+  },
+  {
+    "id": 16000103,
+    "name": "NAJIA",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 6.67,
+    "max_super_range": 5.33
+  },
+  {
+    "id": 16000104,
+    "name": "DAMIAN",
+    "class": "Tank",
+    "rarity": "Mythic",
+    "max_attack_range": 2.67,
+    "max_super_range": 6.0
+  },
+  {
+    "id": 16000105,
+    "name": "STARR NOVA",
+    "class": "Assassin",
+    "rarity": "Mythic",
+    "max_attack_range": 5.67,
+    "max_super_range": 4.33
+  },
+  {
+    "id": 16000106,
+    "name": "BOLT",
+    "class": "Tank",
+    "rarity": "Epic",
+    "max_attack_range": null,
+    "max_super_range": null
+  },
+  {
+    "id": 16000107,
+    "name": "NORI",
+    "class": "Assassin",
+    "rarity": "Legendary",
+    "max_attack_range": 16.67,
+    "max_super_range": null
+  },
+  {
+    "id": 16000108,
+    "name": "WENDY",
+    "class": "Support",
+    "rarity": "Mythic",
+    "max_attack_range": 8.0,
+    "max_super_range": 5.0
+  },
+  {
+    "id": 16000109,
+    "name": "COSMO",
+    "class": "Controller",
+    "rarity": "Mythic",
+    "max_attack_range": 9.0,
+    "max_super_range": 9.33
+  },
+  {
+    "id": 16000110,
+    "name": "VINCE",
+    "class": "Damage Dealer",
+    "rarity": "Mythic",
+    "max_attack_range": 8.33,
+    "max_super_range": 9.0
+  }
+]

@@ -72,7 +72,6 @@ dependencies = [
     { name = "equinox" },
     { name = "httpx" },
     { name = "jax" },
-    { name = "jax", extra = ["cuda"], marker = "sys_platform == 'linux'" },
     { name = "jax2onnx" },
     { name = "jaxtyping" },
     { name = "jpc" },
@@ -94,6 +93,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+cuda = [
+    { name = "jax", extra = ["cuda"], marker = "sys_platform == 'linux'" },
+]
 dev = [
     { name = "basedpyright" },
     { name = "onnxruntime" },
@@ -106,7 +108,6 @@ requires-dist = [
     { name = "equinox", specifier = ">=0.13.8" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jax", specifier = ">=0.11.1" },
-    { name = "jax", extras = ["cuda"], marker = "sys_platform == 'linux'", specifier = ">=0.11.1" },
     { name = "jax2onnx", specifier = ">=0.16.1" },
     { name = "jaxtyping", specifier = ">=0.3.11" },
     { name = "jpc", git = "https://github.com/simondoesstuff/jpc" },
@@ -128,6 +129,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+cuda = [{ name = "jax", extras = ["cuda"], marker = "sys_platform == 'linux'", specifier = ">=0.11.1" }]
 dev = [
     { name = "basedpyright", specifier = ">=1.39.10" },
     { name = "onnxruntime", specifier = ">=1.30.0" },
