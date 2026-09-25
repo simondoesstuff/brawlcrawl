@@ -649,7 +649,7 @@ def train(
         ),
     ] = _OUT_DIR,
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = _DATA_DIR,
-    n_iters: Annotated[int, typer.Option(help="Training iterations")] = 7_000,
+    n_iters: Annotated[int, typer.Option(help="Training iterations")] = 3_500,
     batch_episodes: Annotated[
         int, typer.Option(help="Episodes per gradient step")
     ] = 64,

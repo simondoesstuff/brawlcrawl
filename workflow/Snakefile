@@ -2,6 +2,11 @@ def fetch_brawl_stars(endpoint: str, output: str) -> str:
 	return f"wget --header=\"Authorization: Bearer $BSTOK\" -qO- 'https://api.brawlstars.com/v1/{endpoint}' | jq '.' > {output}"
 
 
+# Every crawl dataset on disk, discovered rather than listed, so a new
+# crawl_<name>.json is picked up without editing this file.
+CRAWLS = sorted(glob_wildcards("data/crawl_{crawl}.json").crawl)
+
+
 rule brawlers:
 	output:
 		"data/brawlers.json"
@@ -108,6 +113,42 @@ rule battlelog:
 		fetch_brawl_stars("players/%23{wildcards.tag}/battlelog", "{output}")
 
 
+rule events:
+	"""Resolve every event id seen in any crawl to its mode/map details (needs $BSTOK).
+
+	An accumulator, not a pure function of one crawl: `events-crawl` loads the
+	existing events.json and only queries the ids it doesn't already have, so
+	the output is flagged `update()` -- without it Snakemake deletes the file
+	first and every run becomes a full re-crawl of a rate-limited API.
+	`update()` also backs the file up and restores it if the crawl dies
+	partway, which a best-effort scrape does.
+
+	`touch` at the end because a no-op run ("all ids already known") writes
+	nothing, and without a newer mtime this rule would re-fire forever.
+
+	Consumers take this as `ancient()` -- built if missing, but never a
+	rerun trigger -- because a grown events.json widens the event/map vocab
+	(`load_vocabs`) past what an existing terminal checkpoint was trained on,
+	and everything downstream deserialises into that checkpoint's shapes.
+	Cascading would therefore just crash (`embed_map_id` shape mismatch); the
+	one step that reconciles a grown vocab is `geneus train --init-from`
+	(`just continue-training`), which is deliberately outside this DAG. So
+	new maps mean: refresh events.json, retrain the terminal model, then
+	`just crawl-artifacts <crawl>`.
+	"""
+	input:
+		expand("data/crawl_{crawl}.json", crawl=CRAWLS)
+	output:
+		update("data/events.json")
+	shell:
+		"""
+		for dataset in {input}; do
+			uv run crawl events-crawl "$dataset" --output {output}
+		done
+		touch {output}
+		"""
+
+
 rule tier_lists:
 	"""Monte Carlo per-map first-pick tier lists (random continuation), scored by the terminal BrawlModel."""
 	input:
@@ -116,7 +157,7 @@ rule tier_lists:
 		brawler_class="data/brawler_class.json",
 		brawler_range="data/brawler_effective_range.json",
 		brawler_destruction="data/brawler_destruction.json",
-		events="data/events.json",
+		events=ancient("data/events.json"),
 	output:
 		"data/tier_lists_{crawl}.json"
 	shell:
@@ -138,7 +179,7 @@ rule tier_lists_optimal:
 		brawler_class="data/brawler_class.json",
 		brawler_range="data/brawler_effective_range.json",
 		brawler_destruction="data/brawler_destruction.json",
-		events="data/events.json",
+		events=ancient("data/events.json"),
 	output:
 		"data/tier_lists_optimal_{crawl}.json"
 	shell:
@@ -156,7 +197,7 @@ rule draft_train:
 	"""
 	input:
 		terminal_ckpt="data/terminal_{crawl}/model.eqx",
-		events="data/events.json",
+		events=ancient("data/events.json"),
 		brawler_class="data/brawler_class.json",
 		brawler_range="data/brawler_effective_range.json",
 		brawler_destruction="data/brawler_destruction.json",

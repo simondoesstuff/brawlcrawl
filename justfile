@@ -28,8 +28,10 @@ draft-train terminal out *args:
 # after `just train`/`just draft-train` produce data/terminal_<crawl>/
 # model.eqx for a new crawl. Does not touch web/static -- that's a separate,
 # explicit step (`just web-data <crawl>`) once you're ready to deploy it.
-crawl-artifacts crawl:
-	uv run snakemake -s workflow/Snakefile --cores 1 \
+crawl-artifacts crawl *args:
+	#!/usr/bin/env sh
+	shift 1
+	uv run snakemake -s workflow/Snakefile --cores 1 "$@" \
 		data/draft_{{crawl}}/draft_q_best.eqx \
 		data/winrates_{{crawl}}.json \
 		data/pickrates_{{crawl}}.json \
@@ -57,7 +59,8 @@ continue-training ckpt data *args:
 #
 # winrates/pickrates are cheap, deterministic aggregations over the crawl's
 # own committed battles file -- regenerated fresh every time rather than
-# committed. events.json and tier_lists*.json are NOT: events.json comes from
+# committed. events.json and tier_lists*.json are NOT: events.json is built
+# by the Snakemake `events` rule but stays committed because it comes from
 # a rate-limited, best-effort live crawl (needs BSTOK, isn't reproducible on
 # demand), and tier_lists*.json are expensive Monte Carlo output -- both stay
 # committed artifacts, just copied here.
