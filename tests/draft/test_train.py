@@ -6,9 +6,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from geneus.draft.env import AVAILABLE, DraftConfig, GLOBALLY_BANNED, LOCALLY_BANNED
+from geneus.draft.env import AVAILABLE, BELLMAN_SIGNS, DraftConfig, GLOBALLY_BANNED, LOCALLY_BANNED
 from geneus.draft.model import DraftQNetwork
-from geneus.draft.train import _compute_loss, simulate_batch, simulate_episode
+from geneus.draft.train import (
+    _compute_loss,
+    _soft_value,
+    _terminal_logits_pick6,
+    simulate_batch,
+    simulate_episode,
+)
 from geneus.model import BrawlModel
 
 N_CHARS = 20
@@ -184,6 +190,92 @@ def test_bellman_targets_ignore_batch_temperatures(
         "Loss must be invariant to batch['temperatures'] — the Bellman "
         "target should only depend on bellman_temp"
     )
+
+
+# ---------------------------------------------------------------------------
+# 6th (last) pick — exact terminal-model brute force, not the Q-network
+# ---------------------------------------------------------------------------
+
+
+def test_simulate_episode_covers_only_the_eleven_tokened_turns(
+    q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table, terminal_model
+):
+    """The 6th pick has no draft-turn token (see env.py), so it must never
+    appear in the Q-network's training arrays — only turns 0-10 do."""
+    ep = _simulate(
+        q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+        terminal_model, skip_ban_prob=0.0,
+    )
+    assert ep["player_states"].shape == (11, N_CHARS)
+    assert ep["turn_tokens"].shape == (11,)
+    assert ep["valid_masks"].shape == (11, N_CHARS)
+    assert ep["actions"].shape == (11,)
+    assert ep["temperatures"].shape == (11,)
+    assert ep["active"].shape == (11,)
+    assert "pick6_bootstrap" in ep
+    assert "terminal_logit" not in ep
+    assert np.isfinite(ep["pick6_bootstrap"])
+
+
+def test_simulate_batch_stacks_pick6_bootstrap_not_terminal_logits(
+    q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table, terminal_model
+):
+    config = DraftConfig(pool_min=N_CHARS, pool_max=N_CHARS, skip_ban_prob=0.0)
+    rng = np.random.default_rng(0)
+    batch = simulate_batch(
+        q_net, char_encs_all, event_idxs, mode_idxs, char_meta_table,
+        terminal_model, config, rng, n_episodes=3,
+    )
+    assert batch["player_states"].shape == (3, 11, N_CHARS)
+    assert batch["pick6_bootstrap"].shape == (3,)
+    assert "terminal_logits" not in batch
+
+
+def test_terminal_logits_pick6_scores_every_candidate(terminal_model, char_meta_table):
+    picks_a_idx = jnp.array([0, 1, 2], dtype=jnp.int32)
+    picks_b_partial_idx = jnp.array([3, 4], dtype=jnp.int32)
+    cand_idx = jnp.arange(N_CHARS, dtype=jnp.int32)
+    logits = _terminal_logits_pick6(
+        terminal_model,
+        jnp.array(0, dtype=jnp.int32),
+        jnp.array(0, dtype=jnp.int32),
+        picks_a_idx,
+        jnp.array(char_meta_table[np.array(picks_a_idx)]),
+        picks_b_partial_idx,
+        jnp.array(char_meta_table[np.array(picks_b_partial_idx)]),
+        cand_idx,
+        jnp.array(char_meta_table),
+    )
+    assert logits.shape == (N_CHARS,)
+    assert jnp.isfinite(logits).all()
+    # A freshly-initialized terminal model is not degenerate w.r.t. its last
+    # brawler slot — different candidates should score differently.
+    assert not jnp.allclose(logits, logits[0])
+
+
+def test_soft_value_reduces_to_the_only_valid_logit():
+    # A single valid action (rest masked to -inf): the soft value must equal
+    # that logit exactly, regardless of temperature.
+    logits = np.full(6, -np.inf)
+    logits[2] = 3.5
+    assert np.isclose(_soft_value(logits, temp=0.1), 3.5)
+    assert np.isclose(_soft_value(logits, temp=5.0), 3.5)
+
+
+def test_soft_value_matches_hand_computed_logsumexp():
+    logits = np.array([1.0, -1.0, -np.inf, -np.inf])
+    temp = 1.0
+    expected = temp * np.log(np.exp(1.0 / temp) + np.exp(-1.0 / temp))
+    assert np.isclose(_soft_value(logits, temp), expected)
+
+
+def test_pick5_bellman_target_sign_matches_bootstrap_sign():
+    """PICK_5 (the last network-trained turn) is team A; the untokened turn
+    11 is team B — so BELLMAN_SIGNS[10] must be -1.0, and _compute_loss's
+    target for PICK_5 (pick6_bootstrap * BELLMAN_SIGNS[10]) must therefore
+    negate pick6_bootstrap. Getting this backwards makes team A's PICK_5 Q
+    positive exactly when team A is losing."""
+    assert BELLMAN_SIGNS[10] == -1.0
 
 
 def test_bellman_temp_changes_the_loss(

@@ -41,7 +41,6 @@ _EVAL_HISTORY_FILENAME = "eval_history.json"
 
 # Precomputed JAX constants for the Bellman backup
 _BELLMAN_SIGNS_JAX = jnp.array(BELLMAN_SIGNS)  # [11]
-_TERMINAL_SIGN_JAX = jnp.array(TERMINAL_SIGN)
 
 
 # ---------------------------------------------------------------------------
@@ -156,10 +155,50 @@ def _terminal_logit(
     )
 
 
+@eqx.filter_jit
+def _terminal_logits_pick6(
+    terminal_model: BrawlModel,
+    event_idx: jax.Array,
+    mode_idx: jax.Array,
+    picks_a_idx: jax.Array,          # [3] — team A's roster is already complete
+    picks_a_meta: jax.Array,         # [3, 3]
+    picks_b_partial_idx: jax.Array,  # [2] — team B, seats 0-1
+    picks_b_partial_meta: jax.Array,  # [2, 3]
+    cand_idx: jax.Array,             # [n_chars] — every char as the candidate 6th pick
+    cand_meta: jax.Array,            # [n_chars, 3]
+) -> jax.Array:
+    """Score every possible 6th (last) pick directly with the terminal model.
+
+    The 6th pick is the only draft decision with no further draft to look
+    ahead through: team A's roster and team B's other two seats are already
+    fixed, so the frozen terminal BrawlModel can evaluate every remaining
+    candidate exactly. DraftQNetwork is never trained or queried on this
+    turn (see env.py — turn 11 has no draft-turn token); this is the exact
+    replacement for what would otherwise be its 6th-pick approximation.
+    Mirrors `pick.score.get_terminal_pick6_scores` / `_terminal_score_pick6_batch`.
+
+    Returns [n_chars] logits (team-A-wins perspective) — one per candidate.
+    """
+    def score_one(c_idx: jax.Array, c_meta: jax.Array) -> jax.Array:
+        b_idx = jnp.concatenate([picks_b_partial_idx, c_idx[None]])
+        b_meta = jnp.concatenate([picks_b_partial_meta, c_meta[None]], axis=0)
+        return terminal_model(event_idx, mode_idx, picks_a_idx, picks_a_meta, b_idx, b_meta)
+
+    return jax.vmap(score_one)(cand_idx, cand_meta)
+
+
 def _softmax(x: np.ndarray) -> np.ndarray:
     x = x - x.max()
     ex = np.exp(x)
     return ex / ex.sum()
+
+
+def _soft_value(logits_masked: np.ndarray, temp: float) -> float:
+    """temp * logsumexp(logits_masked / temp), over entries where invalid
+    actions are already -inf (matching the masking convention used
+    throughout this file for `_softmax`)."""
+    m = float(logits_masked.max())
+    return temp * (m / temp + float(np.log(np.sum(np.exp((logits_masked - m) / temp)))))
 
 
 def simulate_episode(
@@ -180,15 +219,22 @@ def simulate_episode(
     AVAILABLE or LOCALLY_BANNED — a state the ordinary ban sub-MDP can never
     produce, since each of its 6 turns must select a char to ban.
 
+    Only turns 0-10 (both ban sub-phases + picks 1-5) go through the
+    Q-network — turn 11 (the 6th/last pick) has no draft-turn token (see
+    env.py) and is always resolved by scoring every candidate directly with
+    the frozen terminal model (`_terminal_logits_pick6`), both for the
+    action actually taken and for `pick6_bootstrap`, the exact soft value
+    fed into PICK_5's Bellman target in `_compute_loss`.
+
     Returns a dict with keys:
-        char_encs:    [n_chars, h]   — same for all 12 turns
-        player_states:[12, n_chars]
-        turn_tokens:  [12]
-        valid_masks:  [12, n_chars]
-        actions:      [12]
-        temperatures: [12]
-        active:       [12]          — False for skipped (no-ban) turns
-        terminal_logit: scalar
+        char_encs:      [n_chars, h]   — same for all 11 network turns
+        player_states:  [11, n_chars]
+        turn_tokens:    [11]
+        valid_masks:    [11, n_chars]
+        actions:        [11]
+        temperatures:   [11]
+        active:         [11]          — False for skipped (no-ban) turns
+        pick6_bootstrap: scalar       — exact soft value of team B's 6th pick
     """
     n_events = len(event_idxs)
     n_chars = char_encs_all.shape[1]
@@ -221,18 +267,19 @@ def simulate_episode(
         player_configs=player_configs,
     )
 
-    all_player_states = np.zeros((12, n_chars), dtype=np.int32)
-    all_turn_tokens = np.zeros(12, dtype=np.int32)
-    all_valid_masks = np.zeros((12, n_chars), dtype=bool)
-    all_actions = np.zeros(12, dtype=np.int32)
-    all_temperatures = np.zeros(12, dtype=np.float32)
-    all_active = np.zeros(12, dtype=bool)
+    all_player_states = np.zeros((11, n_chars), dtype=np.int32)
+    all_turn_tokens = np.zeros(11, dtype=np.int32)
+    all_valid_masks = np.zeros((11, n_chars), dtype=bool)
+    all_actions = np.zeros(11, dtype=np.int32)
+    all_temperatures = np.zeros(11, dtype=np.float32)
+    all_active = np.zeros(11, dtype=bool)
 
     skip_bans = rng.random() < config.skip_ban_prob
     start_turn = 6 if skip_bans else 0
 
-    for turn_idx in range(start_turn, 12):
+    for turn_idx in range(start_turn, 11):
         token, team, seat = TURN_SCHEDULE[turn_idx]
+        assert token is not None, "turns 0-10 always carry a draft-turn token"
         p = player_configs[player_idx(team, seat)]
 
         obs = get_player_observed_states(state, turn_idx)
@@ -263,30 +310,54 @@ def simulate_episode(
 
         state = step(state, action, turn_idx)
 
-    # Terminal reward: win logit for team A
-    picks_a_idxs = np.where(state.picks_a)[0]
-    picks_b_idxs = np.where(state.picks_b)[0]
-    logit = float(
-        _terminal_logit(
+    # Turn 11 (6th/last pick, always team B seat 2): no draft-turn token, no
+    # Q-network call. Team A's roster and team B's other two seats are fixed,
+    # so every candidate can be scored exactly with the terminal model.
+    _, team11, seat11 = TURN_SCHEDULE[11]
+    p11 = player_configs[player_idx(team11, seat11)]
+    mask11 = get_valid_action_mask(state, 11)
+    assert mask11.any(), "No valid actions at turn 11 — pool_min too small?"
+
+    picks_a_idxs = np.where(state.picks_a)[0].astype(np.int32)
+    picks_b_partial_idxs = np.where(state.picks_b)[0].astype(np.int32)
+    cand_idxs = np.arange(n_chars, dtype=np.int32)
+    logits_per_cand = np.array(
+        _terminal_logits_pick6(
             terminal_model,
             jnp.array(state.event_idx, dtype=jnp.int32),
             jnp.array(state.mode_idx, dtype=jnp.int32),
-            jnp.array(picks_a_idxs, dtype=jnp.int32),
+            jnp.array(picks_a_idxs),
             jnp.array(char_meta_table[picks_a_idxs], dtype=jnp.int32),
-            jnp.array(picks_b_idxs, dtype=jnp.int32),
-            jnp.array(char_meta_table[picks_b_idxs], dtype=jnp.int32),
+            jnp.array(picks_b_partial_idxs),
+            jnp.array(char_meta_table[picks_b_partial_idxs], dtype=jnp.int32),
+            jnp.array(cand_idxs),
+            jnp.array(char_meta_table[cand_idxs], dtype=jnp.int32),
         )
-    )
+    )  # [n_chars], team-A-wins logit per candidate 6th pick
+
+    q_local_11 = TERMINAL_SIGN * logits_per_cand  # team B's perspective
+    q_masked_11 = np.where(mask11, q_local_11, -np.inf)
+    temp11 = max(p11.temperature, 1e-6)
+    action11 = int(rng.choice(n_chars, p=_softmax(q_masked_11 / temp11)))
+
+    # Exact soft value of team B's 6th pick, at the fixed bellman_temp (not
+    # `temp11`) — the bootstrap target for PICK_5 must not depend on this
+    # episode's random exploration temperature, for the same reason
+    # `bellman_temp` is decoupled everywhere else in this file (see
+    # DraftConfig.bellman_temp).
+    pick6_bootstrap = _soft_value(q_masked_11, config.bellman_temp)
+
+    state = step(state, action11, 11)
 
     return {
         "char_encs": char_encs,  # [n_chars, h]
-        "player_states": all_player_states,  # [12, n_chars]
-        "turn_tokens": all_turn_tokens,  # [12]
-        "valid_masks": all_valid_masks,  # [12, n_chars]
-        "actions": all_actions,  # [12]
-        "temperatures": all_temperatures,  # [12]
-        "active": all_active,  # [12]
-        "terminal_logit": np.float32(logit),
+        "player_states": all_player_states,  # [11, n_chars]
+        "turn_tokens": all_turn_tokens,  # [11]
+        "valid_masks": all_valid_masks,  # [11, n_chars]
+        "actions": all_actions,  # [11]
+        "temperatures": all_temperatures,  # [11]
+        "active": all_active,  # [11]
+        "pick6_bootstrap": np.float32(pick6_bootstrap),
     }
 
 
@@ -322,21 +393,21 @@ def simulate_batch(
         ),  # [N, n_chars, h]
         "player_states": jnp.array(
             np.stack([e["player_states"] for e in episodes])
-        ),  # [N, 12, n_chars]
+        ),  # [N, 11, n_chars]
         "turn_tokens": jnp.array(
             np.stack([e["turn_tokens"] for e in episodes])
-        ),  # [N, 12]
+        ),  # [N, 11]
         "valid_masks": jnp.array(
             np.stack([e["valid_masks"] for e in episodes])
-        ),  # [N, 12, n_chars]
-        "actions": jnp.array(np.stack([e["actions"] for e in episodes])),  # [N, 12]
+        ),  # [N, 11, n_chars]
+        "actions": jnp.array(np.stack([e["actions"] for e in episodes])),  # [N, 11]
         "temperatures": jnp.array(
             np.stack([e["temperatures"] for e in episodes])
-        ),  # [N, 12]
-        "active": jnp.array(np.stack([e["active"] for e in episodes])),  # [N, 12]
-        "terminal_logits": jnp.array(
-            np.array([e["terminal_logit"] for e in episodes])
-        ),  # [N]
+        ),  # [N, 11]
+        "active": jnp.array(np.stack([e["active"] for e in episodes])),  # [N, 11]
+        "pick6_bootstrap": jnp.array(
+            np.array([e["pick6_bootstrap"] for e in episodes])
+        ),  # [N] — exact soft value of team B's 6th pick (terminal model, not the Q-network)
     }
 
 
@@ -369,16 +440,25 @@ def _compute_loss(
     happens only in the final average — so no NaN/inf guarding is needed:
     zero-filled valid_masks there make V finite (logsumexp of an all -1e9
     row).
+
+    The Q-network only ever sees the 11 turns that have a draft-turn token
+    (ban phase + picks 1-5 — see env.py). The 6th (last) pick has no token
+    and isn't part of `q_all` at all: `batch["pick6_bootstrap"]` is the
+    *exact* soft value of that pick, computed directly against the frozen
+    terminal model in `simulate_episode` (never through this — or any —
+    Q-network), and is used as-is for PICK_5's (turn 10's) Bellman target.
+    This keeps the network from having to (re-)learn something the terminal
+    model already answers exactly.
     """
     char_encs = batch["char_encs"]  # [N, n_chars, h]
-    player_states = batch["player_states"]  # [N, 12, n_chars]
-    turn_tokens = batch["turn_tokens"]  # [N, 12]
-    valid_masks = batch["valid_masks"]  # [N, 12, n_chars]
-    actions = batch["actions"]  # [N, 12]
-    active = batch["active"]  # [N, 12]
-    terminal_logits = batch["terminal_logits"]  # [N]
+    player_states = batch["player_states"]  # [N, 11, n_chars]
+    turn_tokens = batch["turn_tokens"]  # [N, 11]
+    valid_masks = batch["valid_masks"]  # [N, 11, n_chars]
+    actions = batch["actions"]  # [N, 11]
+    active = batch["active"]  # [N, 11]
+    pick6_bootstrap = batch["pick6_bootstrap"]  # [N]
 
-    # Q values at all (episode, turn) pairs  →  [N, 12, n_chars]
+    # Q values at all (episode, turn) pairs  →  [N, 11, n_chars]
     def q_for_episode(ce, ps_seq, tt_seq):
         return jax.vmap(lambda ps, tt: q_net(ce, ps, tt))(ps_seq, tt_seq)
 
@@ -391,19 +471,19 @@ def _compute_loss(
     q_masked = jnp.where(valid_masks, q_sg, -1e9)
     V = bellman_temp * jax.scipy.special.logsumexp(
         q_masked / bellman_temp, axis=-1
-    )  # [N, 12]
+    )  # [N, 11]
 
-    # targets[:, 0..10] = V[:, 1..11] * bellman_sign
-    # targets[:, 11]    = terminal_logit * TERMINAL_SIGN
-    targets_early = V[:, 1:] * _BELLMAN_SIGNS_JAX[None, :]  # [N, 11]
-    targets_last = terminal_logits * _TERMINAL_SIGN_JAX  # [N]
-    targets = jnp.concatenate([targets_early, targets_last[:, None]], axis=1)  # [N, 12]
+    # targets[:, 0..8] = V[:, 1..9] * bellman_sign   — turn t <- network turn t+1
+    # targets[:, 9]    = pick6_bootstrap * bellman_sign(10)  — PICK_5 <- exact pick 6
+    targets_early = V[:, 1:] * _BELLMAN_SIGNS_JAX[None, :10]  # [N, 10]
+    targets_last = pick6_bootstrap * _BELLMAN_SIGNS_JAX[10]  # [N]
+    targets = jnp.concatenate([targets_early, targets_last[:, None]], axis=1)  # [N, 11]
 
     # Q predictions at the taken actions
     N = q_all.shape[0]
     ep = jnp.arange(N)[:, None]
-    tr = jnp.arange(12)[None, :]
-    q_pred = q_all[ep, tr, actions]  # [N, 12]
+    tr = jnp.arange(11)[None, :]
+    q_pred = q_all[ep, tr, actions]  # [N, 11]
 
     active_f = active.astype(q_pred.dtype)
     sq_err = (q_pred - targets) ** 2 * active_f
@@ -536,10 +616,39 @@ def _eval_episode(
 
     for turn_idx in range(12):
         token, team, seat = TURN_SCHEDULE[turn_idx]
-        obs = get_player_observed_states(state, turn_idx)
         mask = get_valid_action_mask(state, turn_idx)
 
-        if team == eval_team:
+        if turn_idx == 11:
+            # 6th/last pick: no draft-turn token, so eval_team (if it's the
+            # one acting here) uses the exact terminal-model score per
+            # candidate instead of the Q-network — same policy as training's
+            # simulate_episode and as the deployed pick.score inference path.
+            if team == eval_team:
+                picks_a_idxs = np.where(state.picks_a)[0].astype(np.int32)
+                picks_b_partial_idxs = np.where(state.picks_b)[0].astype(np.int32)
+                cand_idxs = np.arange(n_chars, dtype=np.int32)
+                logits_per_cand = np.array(
+                    _terminal_logits_pick6(
+                        terminal_model,
+                        jnp.array(state.event_idx, dtype=jnp.int32),
+                        jnp.array(state.mode_idx, dtype=jnp.int32),
+                        jnp.array(picks_a_idxs),
+                        jnp.array(char_meta_table[picks_a_idxs], dtype=jnp.int32),
+                        jnp.array(picks_b_partial_idxs),
+                        jnp.array(char_meta_table[picks_b_partial_idxs], dtype=jnp.int32),
+                        jnp.array(cand_idxs),
+                        jnp.array(char_meta_table[cand_idxs], dtype=jnp.int32),
+                    )
+                )
+                q_masked = np.where(mask, TERMINAL_SIGN * logits_per_cand, -np.inf)
+                action = int(
+                    rng.choice(n_chars, p=_softmax(q_masked / max(eval_temp, 1e-6)))
+                )
+            else:
+                valid_idxs = np.where(mask)[0]
+                action = int(rng.choice(valid_idxs))
+        elif team == eval_team:
+            obs = get_player_observed_states(state, turn_idx)
             q_vals = np.array(
                 _q_apply(
                     q_net,

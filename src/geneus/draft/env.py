@@ -46,9 +46,14 @@ PICK_2 = 3      # Team B, seat 0
 PICK_3 = 4      # Team B, seat 1
 PICK_4 = 5      # Team A, seat 1
 PICK_5 = 6      # Team A, seat 2
-PICK_6 = 7      # Team B, seat 2 (last pick)
 
-N_DRAFT_TOKENS = 8
+# There is no token for the sixth (last) pick: by the time it's made, every
+# other roster slot is fixed, so the frozen terminal BrawlModel can score
+# every remaining candidate directly and exactly — DraftQNetwork is never
+# queried for it (see train.py's `_terminal_logits_pick6` and
+# pick.score.get_terminal_pick6_scores). TURN_SCHEDULE still carries a row
+# for it (team/seat bookkeeping), just with `token=None`.
+N_DRAFT_TOKENS = 7
 
 # ---------------------------------------------------------------------------
 # Full 12-turn schedule: (turn_token, team, seat_within_team)
@@ -56,7 +61,7 @@ N_DRAFT_TOKENS = 8
 # Bans:  A0, A1, A2, B0, B1, B2   — sequential approximation of simultaneous
 # Picks: A BB AA B  (team A = first-picking team by convention)
 # ---------------------------------------------------------------------------
-TURN_SCHEDULE: list[tuple[int, str, int]] = [
+TURN_SCHEDULE: list[tuple[int | None, str, int]] = [
     (BAN_PHASE_FIRST_PICK, "A", 0),
     (BAN_PHASE_FIRST_PICK, "A", 1),
     (BAN_PHASE_FIRST_PICK, "A", 2),
@@ -68,7 +73,7 @@ TURN_SCHEDULE: list[tuple[int, str, int]] = [
     (PICK_3, "B", 1),
     (PICK_4, "A", 1),
     (PICK_5, "A", 2),
-    (PICK_6, "B", 2),
+    (None, "B", 2),
 ]
 
 # Team index per turn: 0 = A, 1 = B  (shape [12])
@@ -77,10 +82,16 @@ TURN_TEAMS = np.array([0 if t[1] == "A" else 1 for t in TURN_SCHEDULE], dtype=np
 # Whether the team at turn t equals the team at turn t+1  (shape [11])
 SAME_TEAM_NEXT: np.ndarray = (TURN_TEAMS[:-1] == TURN_TEAMS[1:])
 
-# Bellman sign per turn t (applied to V_{t+1} when computing target_t)
+# Bellman sign per turn t (applied to V_{t+1} when computing target_t).
+# BELLMAN_SIGNS[10] (the transition into the untokened turn 11) is what
+# converts the exact pick-6 value into PICK_5's Bellman target — see
+# train.py::_compute_loss.
 BELLMAN_SIGNS: np.ndarray = np.where(SAME_TEAM_NEXT, 1.0, -1.0).astype(np.float32)
 
-# The last pick is always team B in this schedule → Q_local = -logit_A at terminal
+# The last pick is always team B in this schedule → Q_local = -logit_A.
+# Used to convert the terminal model's per-candidate logits (team-A-wins
+# perspective) into team B's Q_local when brute-forcing pick 6 directly
+# (train.py::_terminal_logits_pick6), not as a Bellman-target sign.
 TERMINAL_SIGN: float = -1.0
 
 

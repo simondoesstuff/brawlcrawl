@@ -144,7 +144,7 @@ def _build_obs(
     ally_first: bool,
     local_pool: set[int] | None = None,
     brawlers: list[BrawlerInfo] | None = None,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int | None]:
     """Build the character observation vector and turn token for the acting player.
 
     local_pool: set of brawler IDs the acting player can select.  Brawlers not in
@@ -154,6 +154,12 @@ def _build_obs(
     the model's team A always gets the first pick, team B the sixth (last).
     ally_first says whether the ally maps to model team A or B, so it also
     determines which team is acting during each ban sub-phase.
+
+    Returns `turn_token=None` at phase 11 (the 6th/last pick): that turn has
+    no draft-turn token (see geneus.draft.env — DraftQNetwork is never
+    queried for it), so callers must not feed this observation to
+    `get_q_values`/`DraftQNetwork` at that phase — use
+    `get_terminal_pick6_scores` instead.
     """
     obs = np.zeros(n_chars, dtype=np.int32)
 
@@ -327,13 +333,16 @@ def get_q_values(
 ) -> np.ndarray:
     """Compute Q-values [n_chars] for the current draft phase.
 
-    Phase 0-2: ally bans; phase 3-5: enemy bans; phase 6-11: picks 0-5.
+    Phase 0-2: ally bans; phase 3-5: enemy bans; phase 6-10: picks 0-4.
+    Not valid at phase 11 (the 6th/last pick) — that turn has no draft-turn
+    token; use `get_terminal_pick6_scores` instead.
     local_pool: brawler IDs the acting player can select; others are LOCALLY_BANNED.
     """
     obs, turn_token = _build_obs(
         ctx.n_chars, ally_bans, enemy_bans, picks, phase, ally_first,
         local_pool=local_pool, brawlers=ctx.brawlers,
     )
+    assert turn_token is not None, "get_q_values is not valid at phase 11 (6th pick) — use get_terminal_pick6_scores"
     enc_row = ctx.event_enc_row[event.event_idx]
     return np.array(_q_apply(
         ctx.q_net,

@@ -17,7 +17,6 @@ from geneus.draft.env import (
     PICK_3,
     PICK_4,
     PICK_5,
-    PICK_6,
     SAME_TEAM_NEXT,
     TERMINAL_SIGN,
     TURN_SCHEDULE,
@@ -81,7 +80,7 @@ def test_turn_token_uniquely_determines_team():
     """The turn token must fully determine the acting team — this is exactly the
     invariant the ban-phase split establishes (previously both teams' ban turns
     shared BAN_PHASE, hiding team identity from the network)."""
-    token_to_teams: dict[int, set[str]] = {}
+    token_to_teams: dict[int | None, set[str]] = {}
     for token, team, _ in TURN_SCHEDULE:
         token_to_teams.setdefault(token, set()).add(team)
     for token, teams in token_to_teams.items():
@@ -89,10 +88,20 @@ def test_turn_token_uniquely_determines_team():
 
 
 def test_pick_tokens():
-    expected = [PICK_1, PICK_2, PICK_3, PICK_4, PICK_5, PICK_6]
-    for i, (turn_idx, exp) in enumerate(zip(range(6, 12), expected)):
+    expected = [PICK_1, PICK_2, PICK_3, PICK_4, PICK_5]
+    for turn_idx, exp in zip(range(6, 11), expected):
         token, _, _ = TURN_SCHEDULE[turn_idx]
         assert token == exp, f"Turn {turn_idx} should have token {exp}, got {token}"
+
+
+def test_sixth_pick_has_no_token():
+    """Turn 11 (the 6th/last pick) is never fed to DraftQNetwork — it's
+    resolved exactly by scoring every candidate with the frozen terminal
+    model instead (see train.py::_terminal_logits_pick6), so it carries no
+    embedding index."""
+    token, team, seat = TURN_SCHEDULE[11]
+    assert token is None
+    assert (team, seat) == ("B", 2)
 
 
 def test_pick_order_teams():
