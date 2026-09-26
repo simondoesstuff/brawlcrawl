@@ -29,7 +29,7 @@ def ctx() -> DraftContext:
     terminal_model = BrawlModel(
         n_events=2, n_modes=1, n_chars=N_CHARS,
         n_classes=N_CLASSES, n_ranges=N_RANGES, n_destructs=N_DESTRUCTS,
-        embed_dim=8, hidden_dim=16, dropout_p=0.0,
+        d_model=16, n_heads=2, n_blocks=1, dropout_p=0.0,
         key=jax.random.PRNGKey(0),
     )
     q_net = DraftQNetwork(h_terminal=16, d_model=12, n_heads=2, n_layers=1, key=jax.random.PRNGKey(1))

@@ -11,9 +11,10 @@ pick *args="":
 	#!/usr/bin/env sh
 	uv run pick "$@"
 
-train *args="":
+train data out *args:
 	#!/usr/bin/env sh
-	uv run geneus "$@"
+	shift 2
+	uv run geneus --battles-file {{data}} --out {{out}} "$@"
 
 draft-train terminal out *args:
 	#!/usr/bin/env sh

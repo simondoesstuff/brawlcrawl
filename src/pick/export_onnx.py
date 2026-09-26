@@ -471,8 +471,9 @@ def main(
     data_dir: Annotated[Path, typer.Option(help="Data directory")] = Path("data"),
     terminal_ckpt: Annotated[Path, typer.Option(help="Frozen BrawlModel checkpoint (.eqx)")] = Path("data/model/model.eqx"),
     draft_ckpt: Annotated[Path, typer.Option(help="Draft Q-network weights (.eqx)")] = Path("data/draft_model/draft_q.eqx"),
-    embed_dim: Annotated[int, typer.Option(help="BrawlModel embedding dimension")] = 32,
-    hidden_dim: Annotated[int, typer.Option(help="BrawlModel hidden dimension")] = 64,
+    terminal_d_model: Annotated[int, typer.Option(help="BrawlModel embedding/transformer dimension")] = 56,
+    terminal_n_heads: Annotated[int, typer.Option(help="BrawlModel attention heads")] = 4,
+    terminal_n_blocks: Annotated[int, typer.Option(help="BrawlModel self-attn + cross-attn block pairs")] = 2,
     d_model: Annotated[int, typer.Option(help="DraftQNetwork d_model")] = 64,
     n_heads: Annotated[int, typer.Option(help="DraftQNetwork attention heads")] = 4,
     n_layers: Annotated[int, typer.Option(help="DraftQNetwork transformer layers")] = 2,
@@ -488,7 +489,7 @@ def main(
     console.print(f"Loading draft model    [dim]{draft_ckpt}[/dim]...")
     ctx = load_context(
         data_dir, terminal_ckpt, draft_ckpt,
-        embed_dim=embed_dim, hidden_dim=hidden_dim,
+        terminal_d_model=terminal_d_model, terminal_n_heads=terminal_n_heads, terminal_n_blocks=terminal_n_blocks,
         d_model=d_model, n_heads=n_heads, n_layers=n_layers,
         stats_leg=stats_leg,
     )

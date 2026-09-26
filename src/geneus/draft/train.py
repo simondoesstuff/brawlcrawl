@@ -658,12 +658,15 @@ def train(
     d_model: Annotated[int, typer.Option(help="Transformer hidden dimension")] = 64,
     n_heads: Annotated[int, typer.Option(help="Attention heads")] = 4,
     n_layers: Annotated[int, typer.Option(help="Transformer layers")] = 2,
-    terminal_embed_dim: Annotated[
-        int, typer.Option(help="embed_dim of the frozen BrawlModel")
-    ] = 32,
-    terminal_hidden_dim: Annotated[
-        int, typer.Option(help="hidden_dim of the frozen BrawlModel")
-    ] = 64,
+    terminal_d_model: Annotated[
+        int, typer.Option(help="d_model of the frozen BrawlModel")
+    ] = 56,
+    terminal_n_heads: Annotated[
+        int, typer.Option(help="n_heads of the frozen BrawlModel")
+    ] = 4,
+    terminal_n_blocks: Annotated[
+        int, typer.Option(help="n_blocks of the frozen BrawlModel")
+    ] = 2,
     pool_min: Annotated[
         int, typer.Option(help="Minimum local pool size per player")
     ] = 12,
@@ -717,8 +720,9 @@ def train(
         n_classes=vocabs.n_classes,
         n_ranges=vocabs.n_ranges,
         n_destructs=vocabs.n_destructs,
-        embed_dim=terminal_embed_dim,
-        hidden_dim=terminal_hidden_dim,
+        d_model=terminal_d_model,
+        n_heads=terminal_n_heads,
+        n_blocks=terminal_n_blocks,
         key=jax.random.PRNGKey(0),
     )
     terminal_model = eqx.tree_deserialise_leaves(terminal_ckpt, terminal_model)
@@ -919,8 +923,9 @@ def train(
 def _load_terminal_model_and_encs(
     terminal_ckpt: Path,
     data_dir: Path,
-    terminal_embed_dim: int,
-    terminal_hidden_dim: int,
+    terminal_d_model: int,
+    terminal_n_heads: int,
+    terminal_n_blocks: int,
 ) -> tuple[BrawlModel, np.ndarray, np.ndarray, np.ndarray, np.ndarray, "Vocabs"]:
     vocabs = load_vocabs(data_dir)
     terminal_model = BrawlModel(
@@ -930,8 +935,9 @@ def _load_terminal_model_and_encs(
         n_classes=vocabs.n_classes,
         n_ranges=vocabs.n_ranges,
         n_destructs=vocabs.n_destructs,
-        embed_dim=terminal_embed_dim,
-        hidden_dim=terminal_hidden_dim,
+        d_model=terminal_d_model,
+        n_heads=terminal_n_heads,
+        n_blocks=terminal_n_blocks,
         key=jax.random.PRNGKey(0),
     )
     terminal_model = eqx.tree_deserialise_leaves(terminal_ckpt, terminal_model)
@@ -949,8 +955,9 @@ def eval(
     ],
     terminal_ckpt: Annotated[Path, typer.Option()] = Path("data/model/model.eqx"),
     data_dir: Annotated[Path, typer.Option()] = _DATA_DIR,
-    terminal_embed_dim: Annotated[int, typer.Option()] = 32,
-    terminal_hidden_dim: Annotated[int, typer.Option()] = 64,
+    terminal_d_model: Annotated[int, typer.Option()] = 56,
+    terminal_n_heads: Annotated[int, typer.Option()] = 4,
+    terminal_n_blocks: Annotated[int, typer.Option()] = 2,
     n_episodes: Annotated[
         int, typer.Option(help="Eval episodes (split evenly A/B)")
     ] = 400,
@@ -970,7 +977,7 @@ def eval(
     """Evaluate a checkpoint's Q-net win rate vs a uniformly-random opponent."""
     terminal_model, char_encs_all, event_idxs, mode_idxs, char_meta_table, vocabs = (
         _load_terminal_model_and_encs(
-            terminal_ckpt, data_dir, terminal_embed_dim, terminal_hidden_dim
+            terminal_ckpt, data_dir, terminal_d_model, terminal_n_heads, terminal_n_blocks
         )
     )
     pool_max = pool_max if pool_max is not None else vocabs.n_chars
@@ -1023,8 +1030,9 @@ def eval_sweep(
     ] = _OUT_DIR / _CHECKPOINTS_DIRNAME,
     terminal_ckpt: Annotated[Path, typer.Option()] = Path("data/model/model.eqx"),
     data_dir: Annotated[Path, typer.Option()] = _DATA_DIR,
-    terminal_embed_dim: Annotated[int, typer.Option()] = 32,
-    terminal_hidden_dim: Annotated[int, typer.Option()] = 64,
+    terminal_d_model: Annotated[int, typer.Option()] = 56,
+    terminal_n_heads: Annotated[int, typer.Option()] = 4,
+    terminal_n_blocks: Annotated[int, typer.Option()] = 2,
     n_episodes: Annotated[int, typer.Option(help="Eval episodes per checkpoint")] = 400,
     eval_temp: Annotated[float, typer.Option()] = 0.1,
     d_model: Annotated[int, typer.Option()] = 64,
@@ -1049,7 +1057,7 @@ def eval_sweep(
 
     terminal_model, char_encs_all, event_idxs, mode_idxs, char_meta_table, vocabs = (
         _load_terminal_model_and_encs(
-            terminal_ckpt, data_dir, terminal_embed_dim, terminal_hidden_dim
+            terminal_ckpt, data_dir, terminal_d_model, terminal_n_heads, terminal_n_blocks
         )
     )
     pool_max = pool_max if pool_max is not None else vocabs.n_chars

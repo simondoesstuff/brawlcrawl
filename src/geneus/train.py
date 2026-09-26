@@ -1,5 +1,6 @@
 """Training loop and CLI for the BrawlModel."""
 
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +12,8 @@ import numpy as np
 import optax
 import plotext as plt
 import typer
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from tqdm import tqdm
 
 from geneus.data import BattleArrays, WinrateArrays, load_battles, load_vocabs, load_winrates, train_val_split
@@ -18,32 +21,66 @@ from geneus.model import BrawlModel
 
 app = typer.Typer(add_completion=False)
 
+# Modules whose params should never be weight-decayed: embedding tables (decay
+# would uniformly shrink learned per-brawler/per-category vectors) and
+# LayerNorm (decay fights the normalization it's meant to provide). Matched by
+# attribute name since eqx.nn.Linear and eqx.nn.LayerNorm both name their
+# array fields "weight"/"bias" -- ancestry, not the leaf's own name, is what
+# distinguishes a LayerNorm's weight from a Linear's.
+_NO_DECAY_MODULES = frozenset({
+    "embed_map_id", "embed_map_mode", "embed_char",
+    "embed_class", "embed_range", "embed_destruct",
+    "self_norm", "cross_norm_q", "cross_norm_kv", "ffn_norm",
+})
+# Leaf names excluded regardless of ancestry: every Linear/attention bias
+# (standard AdamW practice) and Swish's beta (a lone learned scalar).
+_NO_DECAY_LEAF_NAMES = frozenset({"bias", "beta"})
+
+
+def _decay_mask(params: object) -> object:
+    """AdamW weight-decay mask: True on weight matrices (attention/FFN/
+    projection Linear.weight), False on embeddings, LayerNorm weight/bias,
+    Linear biases, and Swish.beta."""
+
+    def leaf_mask(path: tuple, leaf: object) -> bool:
+        names = {k.name for k in path if isinstance(k, jax.tree_util.GetAttrKey)}
+        if names & _NO_DECAY_MODULES:
+            return False
+        last = path[-1]
+        if isinstance(last, jax.tree_util.GetAttrKey) and last.name in _NO_DECAY_LEAF_NAMES:
+            return False
+        return True
+
+    return jax.tree_util.tree_map_with_path(leaf_mask, params)
+
 _DATA_DIR = Path("data")
-_BATTLES_FILE = _DATA_DIR / "crawl_leg1_20260827.json"
-_MODEL_OUT_DIR = _DATA_DIR / "model"
 _MODEL_FILENAME = "model.eqx"
 
 
-def _to_jax(batch: BattleArrays) -> BattleArrays:
+def _put(x: np.ndarray, sharding: jax.sharding.Sharding | None) -> jax.Array:
+    return jax.device_put(x, sharding) if sharding is not None else jnp.asarray(x)
+
+
+def _to_jax(batch: BattleArrays, sharding: jax.sharding.Sharding | None = None) -> BattleArrays:
     return BattleArrays(
-        event_idx=jnp.asarray(batch.event_idx),
-        mode_idx=jnp.asarray(batch.mode_idx),
-        team_a_chars=jnp.asarray(batch.team_a_chars),
-        team_a_meta=jnp.asarray(batch.team_a_meta),
-        team_b_chars=jnp.asarray(batch.team_b_chars),
-        team_b_meta=jnp.asarray(batch.team_b_meta),
-        a_wins=jnp.asarray(batch.a_wins),
-        totals=jnp.asarray(batch.totals),
+        event_idx=_put(batch.event_idx, sharding),
+        mode_idx=_put(batch.mode_idx, sharding),
+        team_a_chars=_put(batch.team_a_chars, sharding),
+        team_a_meta=_put(batch.team_a_meta, sharding),
+        team_b_chars=_put(batch.team_b_chars, sharding),
+        team_b_meta=_put(batch.team_b_meta, sharding),
+        a_wins=_put(batch.a_wins, sharding),
+        totals=_put(batch.totals, sharding),
     )
 
 
-def _to_jax_winrates(w: WinrateArrays) -> WinrateArrays:
+def _to_jax_winrates(w: WinrateArrays, sharding: jax.sharding.Sharding | None = None) -> WinrateArrays:
     return WinrateArrays(
-        event_idx=jnp.asarray(w.event_idx),
-        mode_idx=jnp.asarray(w.mode_idx),
-        char_idx=jnp.asarray(w.char_idx),
-        char_meta=jnp.asarray(w.char_meta),
-        z_scores=jnp.asarray(w.z_scores),
+        event_idx=_put(w.event_idx, sharding),
+        mode_idx=_put(w.mode_idx, sharding),
+        char_idx=_put(w.char_idx, sharding),
+        char_meta=_put(w.char_meta, sharding),
+        z_scores=_put(w.z_scores, sharding),
     )
 
 
@@ -175,12 +212,25 @@ def _iter_batches(
     winrates: WinrateArrays,
     batch_size: int,
     rng: np.random.Generator,
+    n_devices: int = 1,
+    sharding: jax.sharding.Sharding | None = None,
 ) -> list[tuple[BattleArrays, WinrateArrays]]:
+    """Cut `arrays` into `batch_size`-ish chunks and place them on `sharding`.
+
+    Each chunk's size is truncated down to a multiple of `n_devices` (dropping
+    a few leftover rows at most) so it shards evenly across the data-parallel
+    mesh axis — `jax.device_put` with a sharded `PartitionSpec` requires exact
+    divisibility. A chunk that truncates to 0 (only possible on the final,
+    smallest chunk) is dropped.
+    """
     perm = rng.permutation(len(arrays))
     batches = []
     for start in range(0, len(arrays), batch_size):
         idx = perm[start : start + batch_size]
-        n = len(idx)
+        n = len(idx) - (len(idx) % n_devices)
+        if n == 0:
+            continue
+        idx = idx[:n]
         battle_batch = _to_jax(BattleArrays(
             event_idx=arrays.event_idx[idx],
             mode_idx=arrays.mode_idx[idx],
@@ -190,7 +240,7 @@ def _iter_batches(
             team_b_meta=arrays.team_b_meta[idx],
             a_wins=arrays.a_wins[idx],
             totals=arrays.totals[idx],
-        ))
+        ), sharding)
         # Sample a winrate mini-batch with replacement (winrate data << steps × batch_size).
         wr_idx = rng.integers(0, len(winrates.event_idx), size=n)
         wr_batch = _to_jax_winrates(WinrateArrays(
@@ -199,7 +249,7 @@ def _iter_batches(
             char_idx=winrates.char_idx[wr_idx],
             char_meta=winrates.char_meta[wr_idx],
             z_scores=winrates.z_scores[wr_idx],
-        ))
+        ), sharding)
         batches.append((battle_batch, wr_batch))
     return batches
 
@@ -275,30 +325,42 @@ def _save_curves(
 def train(
     *,
     data_dir: Annotated[Path, typer.Option(help="Data directory (vocab/reference files: events.json, brawler_class.json, etc.)")] = _DATA_DIR,
-    battles_file: Annotated[Path, typer.Option(help="Path to the crawl battles JSON file")] = _BATTLES_FILE,
+    battles_file: Annotated[Path, typer.Option(help="Path to the crawl battles JSON file")],
     winrates_file: Annotated[
         Path | None,
         typer.Option(help="Path to the per-char winrate JSON file (default: battles_file with its 'crawl_' prefix swapped for 'winrates_')"),
     ] = None,
-    out: Annotated[Path, typer.Option(help="Output directory for the best model, checkpoints, and training curves")] = _MODEL_OUT_DIR,
+    out: Annotated[Path, typer.Option(help="Output directory for the best model, checkpoints, and training curves (e.g. data/terminal_myt2_20260916)")],
     init_from: Annotated[
         Path | None,
         typer.Option(help="Warm-start model weights from an existing .eqx checkpoint before training on --battles-file. Optimizer/scheduler state is always reinitialized, not restored."),
     ] = None,
-    epochs: Annotated[int, typer.Option(help="Training epochs")] = 400,
+    epochs: Annotated[int, typer.Option(help="Training epochs")] = 80,
     batch_size: Annotated[int, typer.Option(help="Batch size")] = 512,
     lr: Annotated[float, typer.Option(help="Peak learning rate")] = 1e-3,
     weight_decay: Annotated[float, typer.Option(help="AdamW weight decay")] = 1e-4,
-    embed_dim: Annotated[int, typer.Option(help="Embedding dimension")] = 32,
-    hidden_dim: Annotated[int, typer.Option(help="MLP hidden dimension")] = 64,
-    dropout_p: Annotated[float, typer.Option(help="Dropout probability (char + MLP)")] = 0.3,
+    d_model: Annotated[int, typer.Option(help="Embedding / transformer dimension")] = 56,
+    n_heads: Annotated[int, typer.Option(help="Attention heads per block")] = 4,
+    n_blocks: Annotated[int, typer.Option(help="Self-attn + cross-attn block pairs")] = 2,
+    dropout_p: Annotated[float, typer.Option(help="Dropout probability (char + FFN)")] = 0.4,
     val_frac: Annotated[float, typer.Option(help="Validation fraction")] = 0.15,
     checkpoint_every: Annotated[int, typer.Option(help="Periodic checkpoint interval in epochs (0=off)")] = 20,
+    log_every: Annotated[
+        int,
+        typer.Option(help="Log running train loss + val loss/acc every N steps within an epoch, in addition to the once-per-epoch summary (0=off). Each log runs a full val-set forward pass, so smaller values cost real throughput."),
+    ] = 100,
     winrate_weight: Annotated[float, typer.Option(help="Weight of the per-char winrate auxiliary loss")] = 0.1,
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
     if winrates_file is None:
         winrates_file = battles_file.with_name(battles_file.name.replace("crawl_", "winrates_", 1))
+
+    n_devices = jax.local_device_count()
+    devices = mesh_utils.create_device_mesh((n_devices,))
+    mesh = Mesh(devices, axis_names=("data",))
+    replicated_sharding = NamedSharding(mesh, PartitionSpec())
+    data_sharding = NamedSharding(mesh, PartitionSpec("data"))
+    typer.echo(f"Devices: {n_devices} × {devices[0].platform} ({[str(d) for d in devices]})")
 
     typer.echo(f"Loading data ({battles_file})...")
     vocabs = load_vocabs(data_dir)
@@ -321,14 +383,19 @@ def train(
         n_classes=vocabs.n_classes,
         n_ranges=vocabs.n_ranges,
         n_destructs=vocabs.n_destructs,
-        embed_dim=embed_dim,
-        hidden_dim=hidden_dim,
+        d_model=d_model,
+        n_heads=n_heads,
+        n_blocks=n_blocks,
         dropout_p=dropout_p,
         key=key,
     )
     if init_from is not None:
         typer.echo(f"Warm-starting weights from {init_from} (optimizer/scheduler reset)...")
         model = eqx.tree_deserialise_leaves(init_from, model, filter_spec=_grow_vocab_filter_spec)
+    # Replicate the model across every device in the mesh: data parallelism
+    # shards batches, not parameters, so every device needs its own full copy.
+    params, static = eqx.partition(model, eqx.is_array)
+    model = eqx.combine(jax.device_put(params, replicated_sharding), static)
     n_params = sum(x.size for x in jax.tree.leaves(eqx.filter(model, eqx.is_array)))
     typer.echo(f"  {n_params:,} parameters")
 
@@ -342,14 +409,27 @@ def train(
         decay_steps=total_steps,
         end_value=lr * 0.01,
     )
-    optimizer = optax.adamw(learning_rate=schedule, weight_decay=weight_decay)
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
+    optimizer = optax.adamw(learning_rate=schedule, weight_decay=weight_decay, mask=_decay_mask)
+    opt_state = jax.device_put(optimizer.init(eqx.filter(model, eqx.is_array)), replicated_sharding)
     step = make_step_fn(optimizer, winrate_weight=winrate_weight)
 
+    out.mkdir(parents=True, exist_ok=True)
     model_path = out / _MODEL_FILENAME
     ckpt_dir = out / "checkpoints"
     if checkpoint_every > 0:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    # Appended across runs (e.g. --init-from resumes into the same --out), so
+    # a header marks where each run starts. Flushed after every write so the
+    # file stays tail-able live during a long run.
+    log_fh = (out / "train.log").open("a")
+    log_fh.write(
+        f"\n=== run started {datetime.now().isoformat(timespec='seconds')}  "
+        f"d_model={d_model} n_heads={n_heads} n_blocks={n_blocks} dropout_p={dropout_p}  "
+        f"epochs={epochs} batch_size={batch_size} lr={lr} weight_decay={weight_decay}  "
+        f"devices={n_devices} ===\n"
+    )
+    log_fh.flush()
 
     has_val = len(val_data) > 0
     rng = np.random.default_rng(seed)
@@ -364,12 +444,28 @@ def train(
     winrate_loss_hist: list[float] = []
 
     for epoch in tqdm(range(1, epochs + 1), desc="Training", unit="epoch"):
-        batches = _iter_batches(train_data, winrate_data, batch_size, rng)
+        batches = _iter_batches(train_data, winrate_data, batch_size, rng, n_devices, data_sharding)
         batch_losses: list[float] = []
-        for battle_batch, wr_batch in batches:
+        for step_idx, (battle_batch, wr_batch) in enumerate(batches, start=1):
             train_key, step_key = jax.random.split(train_key)
+            step_key = jax.device_put(step_key, replicated_sharding)
             model, opt_state, loss = step(model, opt_state, battle_batch, wr_batch, step_key)
             batch_losses.append(float(loss))
+
+            if log_every > 0 and step_idx % log_every == 0:
+                running_train = float(np.mean(batch_losses[-log_every:]))
+                if has_val:
+                    running_val = float(bce_loss(model, val_jax))
+                    running_acc = float(accuracy(model, val_jax))
+                    step_line = (
+                        f"  epoch {epoch:3d} step {step_idx:5d}/{len(batches)}  "
+                        f"train={running_train:.4f}  val={running_val:.4f}  acc={running_acc:.3f}"
+                    )
+                else:
+                    step_line = f"  epoch {epoch:3d} step {step_idx:5d}/{len(batches)}  train={running_train:.4f}"
+                tqdm.write(step_line)
+                log_fh.write(step_line + "\n")
+                log_fh.flush()
 
         mean_train = float(np.mean(batch_losses))
         wr_loss = float(winrate_loss(model, winrate_jax))
@@ -380,14 +476,12 @@ def train(
             val_acc = float(accuracy(model, val_jax))
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                out.mkdir(parents=True, exist_ok=True)
                 eqx.tree_serialise_leaves(model_path, model)
                 marker = " ✓"
             log_suffix = f"  val={val_loss:.4f}  acc={val_acc:.3f}  wr={wr_loss:.4f}{marker}"
         else:
             val_loss = float("nan")
             val_acc = float("nan")
-            out.mkdir(parents=True, exist_ok=True)
             eqx.tree_serialise_leaves(model_path, model)
             log_suffix = f"  wr={wr_loss:.4f}"
 
@@ -400,7 +494,10 @@ def train(
         val_loss_hist.append(val_loss)
         val_acc_hist.append(val_acc)
         winrate_loss_hist.append(wr_loss)
-        epoch_lines.append(f"Epoch {epoch:3d}  train={mean_train:.4f}{log_suffix}")
+        epoch_line = f"Epoch {epoch:3d}  train={mean_train:.4f}{log_suffix}"
+        epoch_lines.append(epoch_line)
+        log_fh.write(epoch_line + "\n")
+        log_fh.flush()
 
         _render_dashboard(epoch_lines, epochs_x, train_loss_hist, val_loss_hist, val_acc_hist, winrate_loss_hist)
 
@@ -411,6 +508,8 @@ def train(
     else:
         print(f"\nFinal train loss: {mean_train:.4f}  → {model_path}")
     print(f"Training curves  → {curves_path}")
+    print(f"Log                → {log_fh.name}")
+    log_fh.close()
 
 
 def main() -> None:

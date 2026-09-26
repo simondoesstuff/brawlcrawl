@@ -24,7 +24,9 @@ from pick.score import BrawlerInfo, DraftContext, EventInfo
 
 N_CHARS = 20
 N_EVENTS = 3
-H = 16          # BrawlModel hidden_dim == terminal encoding dim
+H = 16          # BrawlModel d_model == terminal encoding dim
+TERMINAL_N_HEADS = 2
+TERMINAL_N_BLOCKS = 1
 D_MODEL = 12
 N_HEADS = 2
 N_LAYERS = 1
@@ -40,7 +42,7 @@ def ctx() -> DraftContext:
     terminal_model = BrawlModel(
         n_events=N_EVENTS, n_modes=2, n_chars=N_CHARS,
         n_classes=N_CLASSES, n_ranges=N_RANGES, n_destructs=N_DESTRUCTS,
-        embed_dim=8, hidden_dim=H, dropout_p=DROPOUT_P,
+        d_model=H, n_heads=TERMINAL_N_HEADS, n_blocks=TERMINAL_N_BLOCKS, dropout_p=DROPOUT_P,
         key=jax.random.PRNGKey(0),
     )
     q_net = DraftQNetwork(h_terminal=H, d_model=D_MODEL, n_heads=N_HEADS, n_layers=N_LAYERS, key=jax.random.PRNGKey(1))

@@ -17,8 +17,9 @@ VOCAB = dict(
     n_classes=7,
     n_ranges=4,
     n_destructs=4,
-    embed_dim=8,
-    hidden_dim=16,
+    d_model=16,
+    n_heads=2,
+    n_blocks=2,
     dropout_p=0.1,
 )
 
@@ -87,25 +88,16 @@ class TestBrawlModel:
         np.testing.assert_allclose(float(logit_ab), -float(logit_ba), atol=1e-5)
 
     def test_anti_symmetry_vanishes_on_diagonal_with_dropout(
-        self, model: BrawlModel, sample_inputs: tuple, monkeypatch: pytest.MonkeyPatch
+        self, model: BrawlModel, sample_inputs: tuple
     ) -> None:
-        """A true antisymmetric function must vanish when both team encodings are
-        identical. This only holds under active training-time dropout if the two
-        `_score` calls inside `__call__` share one dropout mask — independent masks
-        would score the (equal) encodings differently, making the difference nonzero.
-        `_encode_team` is patched to return a fixed vector regardless of input/key,
-        isolating this from the (expected, unrelated) dropout asymmetry between the
-        two teams' own encodings."""
-        event_idx, mode_idx, ta_c, ta_m, tb_c, tb_m = sample_inputs
-        map_emb = model.embed_map_id(event_idx) + model.embed_map_mode(mode_idx)
-        fixed_team = model._encode_team(ta_c, ta_m, map_emb)  # deterministic, no key
-
-        monkeypatch.setattr(
-            BrawlModel,
-            "_encode_team",
-            lambda self, char_idxs, meta_idxs, map_emb, *, key=None: fixed_team,
-        )
-        logit = model(event_idx, mode_idx, ta_c, ta_m, tb_c, tb_m, key=jax.random.PRNGKey(1))
+        """A true antisymmetric function must vanish when both teams are identical.
+        This only holds under active training-time dropout because `__call__` feeds
+        the SAME key into both teams' `_encode_team`/encoder calls: with a shared
+        key and identical inputs, team A and team B take bit-identical paths through
+        every dropout mask, so `a == b` exactly and the bias-free head maps 0 -> 0.
+        Independent per-team keys would break this (and antisymmetry generally)."""
+        event_idx, mode_idx, ta_c, ta_m, _tb_c, _tb_m = sample_inputs
+        logit = model(event_idx, mode_idx, ta_c, ta_m, ta_c, ta_m, key=jax.random.PRNGKey(1))
         assert float(logit) == pytest.approx(0.0, abs=1e-6)
 
     def test_permutation_invariance_team_a(self, model: BrawlModel, sample_inputs: tuple) -> None:

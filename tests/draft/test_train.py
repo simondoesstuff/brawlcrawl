@@ -28,7 +28,7 @@ def terminal_model() -> BrawlModel:
     return BrawlModel(
         n_events=N_EVENTS, n_modes=2, n_chars=N_CHARS,
         n_classes=N_CLASSES, n_ranges=N_RANGES, n_destructs=N_DESTRUCTS,
-        embed_dim=8, hidden_dim=H, key=jax.random.PRNGKey(0),
+        d_model=H, n_heads=2, n_blocks=1, key=jax.random.PRNGKey(0),
     )
 
 
