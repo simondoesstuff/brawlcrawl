@@ -119,8 +119,18 @@ def bce_loss(
     model: BrawlModel,
     batch: BattleArrays,
     key: jax.Array | None = None,
+    label_smoothing: float = 0.0,
 ) -> jax.Array:
-    """Total-weighted BCE. Reconstructs the full Bernoulli likelihood."""
+    """Total-weighted BCE. Reconstructs the full Bernoulli likelihood.
+
+    `label_smoothing` (alpha) applies add-alpha (Laplace) smoothing to each
+    composition's empirical win rate: `p = (a_wins + alpha) / (totals + 2*alpha)`
+    instead of the raw MLE `a_wins / totals`. Most compositions here have only
+    1-3 recorded battles (median 2), so the raw rate is closer to a coin flip
+    than a real estimate -- alpha > 0 pulls low-count rows toward 0.5 in
+    proportion to how little evidence they carry, without ever flipping a
+    unanimous result across the 0.5 decision boundary.
+    """
     if key is not None:
         batch_keys = jax.random.split(key, batch.event_idx.shape[0])
         logits = jax.vmap(
@@ -144,7 +154,7 @@ def bce_loss(
             batch.team_b_meta,
         )
     totals = batch.totals.astype(jnp.float32)
-    p = batch.a_wins.astype(jnp.float32) / totals
+    p = (batch.a_wins.astype(jnp.float32) + label_smoothing) / (totals + 2.0 * label_smoothing)
     bce = -(jax.nn.log_sigmoid(logits) * p + jax.nn.log_sigmoid(-logits) * (1.0 - p))
     return (bce * totals).sum() / totals.sum()
 
@@ -183,6 +193,7 @@ def accuracy(model: BrawlModel, batch: BattleArrays) -> jax.Array:
 def make_step_fn(
     optimizer: optax.GradientTransformation,
     winrate_weight: float = 0.1,
+    label_smoothing: float = 0.0,
 ):
     """Return a jit-compiled training step combining BCE and winrate auxiliary losses."""
 
@@ -196,7 +207,7 @@ def make_step_fn(
     ) -> tuple[BrawlModel, optax.OptState, jax.Array, jax.Array]:
         def loss_fn(m: BrawlModel, k: jax.Array) -> jax.Array:
             k1, k2 = jax.random.split(k)
-            return bce_loss(m, battle_batch, k1) + winrate_weight * winrate_loss(m, winrate_batch, k2)
+            return bce_loss(m, battle_batch, k1, label_smoothing) + winrate_weight * winrate_loss(m, winrate_batch, k2)
 
         loss, grads = eqx.filter_value_and_grad(loss_fn)(model, key)
         updates, new_state = optimizer.update(
@@ -350,6 +361,10 @@ def train(
         typer.Option(help="Log running train loss + val loss/acc every N steps within an epoch, in addition to the once-per-epoch summary (0=off). Each log runs a full val-set forward pass, so smaller values cost real throughput."),
     ] = 100,
     winrate_weight: Annotated[float, typer.Option(help="Weight of the per-char winrate auxiliary loss")] = 0.1,
+    label_smoothing: Annotated[
+        float,
+        typer.Option(help="Add-alpha (Laplace) smoothing on each composition's empirical win rate: p = (a_wins + alpha) / (totals + 2*alpha). Most compositions have only 1-3 recorded battles, so alpha > 0 pulls those targets toward 0.5 instead of letting the model fit near-coin-flip noise."),
+    ] = 1.0,
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
     if winrates_file is None:
@@ -411,7 +426,7 @@ def train(
     )
     optimizer = optax.adamw(learning_rate=schedule, weight_decay=weight_decay, mask=_decay_mask)
     opt_state = jax.device_put(optimizer.init(eqx.filter(model, eqx.is_array)), replicated_sharding)
-    step = make_step_fn(optimizer, winrate_weight=winrate_weight)
+    step = make_step_fn(optimizer, winrate_weight=winrate_weight, label_smoothing=label_smoothing)
 
     out.mkdir(parents=True, exist_ok=True)
     model_path = out / _MODEL_FILENAME
@@ -427,7 +442,7 @@ def train(
         f"\n=== run started {datetime.now().isoformat(timespec='seconds')}  "
         f"d_model={d_model} n_heads={n_heads} n_blocks={n_blocks} dropout_p={dropout_p}  "
         f"epochs={epochs} batch_size={batch_size} lr={lr} weight_decay={weight_decay}  "
-        f"devices={n_devices} ===\n"
+        f"label_smoothing={label_smoothing} devices={n_devices} ===\n"
     )
     log_fh.flush()
 
@@ -455,7 +470,7 @@ def train(
             if log_every > 0 and step_idx % log_every == 0:
                 running_train = float(np.mean(batch_losses[-log_every:]))
                 if has_val:
-                    running_val = float(bce_loss(model, val_jax))
+                    running_val = float(bce_loss(model, val_jax, label_smoothing=label_smoothing))
                     running_acc = float(accuracy(model, val_jax))
                     step_line = (
                         f"  epoch {epoch:3d} step {step_idx:5d}/{len(batches)}  "
@@ -472,7 +487,7 @@ def train(
         marker = ""
 
         if has_val:
-            val_loss = float(bce_loss(model, val_jax))
+            val_loss = float(bce_loss(model, val_jax, label_smoothing=label_smoothing))
             val_acc = float(accuracy(model, val_jax))
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
