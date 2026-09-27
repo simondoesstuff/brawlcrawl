@@ -13,7 +13,7 @@ __pycache__
 !/data/brawler_destruction.json
 !/data/brawler_effective_range.json
 !/data/crawl_leg1_20260827.json
-!/data/crawl_myt2_20260916.json
+!/data/crawl_myt2_20260916.json.gz
 !/data/events.json
 
 # not cheap generated artifacts necessary for web (Monte Carlo tier lists
