@@ -5,6 +5,7 @@ no network calls, no model inference. Cheap enough to regenerate on every
 build rather than commit the derived output.
 """
 
+import gzip
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -13,6 +14,13 @@ from typing import Annotated
 import typer
 
 typer_app = typer.Typer(add_completion=False, help="Win-rate / pick-rate z-scores from crawl stats.")
+
+
+def _load_crawl(path: Path):
+    """Load a `crawl_{leg}.json` dataset, transparently decompressing a `.gz` one."""
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as f:
+        return json.load(f)
 
 
 def _zscore_by_event(rates: dict[tuple[int, int], float]) -> list[dict[str, object]]:
@@ -40,7 +48,7 @@ def winrates(
     output: Annotated[Path, typer.Option(help="Output winrates JSON path")],
 ) -> None:
     """Z-scored win rate per (char, event), relative to other chars on the same map."""
-    raw = json.loads(input.read_text())
+    raw = _load_crawl(input)
     counts: dict[tuple[int, int], list[int]] = defaultdict(lambda: [0, 0])
 
     for entry in raw["stats"]:
@@ -65,7 +73,7 @@ def pickrates(
     output: Annotated[Path, typer.Option(help="Output pickrates JSON path")],
 ) -> None:
     """Z-scored pick rate per (char, event), relative to other chars on the same map."""
-    raw = json.loads(input.read_text())
+    raw = _load_crawl(input)
     appearances: dict[tuple[int, int], int] = defaultdict(int)
     event_totals: dict[int, int] = defaultdict(int)
 

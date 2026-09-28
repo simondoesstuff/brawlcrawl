@@ -1,6 +1,7 @@
 # Dataset Notes
 
 - `crawl_leg1_20260827.json` legendary 1+ battles collected between 2026/07/25 and 2026/08/27
+- Large crawls may be committed gzipped instead (`crawl_<leg>.json.gz`, e.g. `crawl_myt2_20260916.json.gz`). `Dataset.load`, `compute-stats winrates|pickrates`, and `geneus`'s battles loader all detect the `.gz` suffix and decompress transparently; nothing downstream needs to know which form a given crawl is in.
 
 # Dataset Generation
 

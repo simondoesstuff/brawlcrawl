@@ -66,8 +66,12 @@ continue-training ckpt data *args:
 # demand), and tier_lists*.json are expensive Monte Carlo output -- both stay
 # committed artifacts, just copied here.
 web-data crawl="myt2_20260916":
-	uv run compute-stats winrates --input data/crawl_{{crawl}}.json --output data/winrates_{{crawl}}.json
-	uv run compute-stats pickrates --input data/crawl_{{crawl}}.json --output data/pickrates_{{crawl}}.json
+	#!/usr/bin/env sh
+	set -eu
+	crawl_file="data/crawl_{{crawl}}.json"
+	[ -f "$crawl_file" ] || crawl_file="data/crawl_{{crawl}}.json.gz"
+	uv run compute-stats winrates --input "$crawl_file" --output data/winrates_{{crawl}}.json
+	uv run compute-stats pickrates --input "$crawl_file" --output data/pickrates_{{crawl}}.json
 	uv run export-onnx \
 		--terminal-ckpt data/terminal_{{crawl}}/model.eqx \
 		--draft-ckpt data/draft_{{crawl}}/draft_q_best.eqx \

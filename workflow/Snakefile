@@ -1,10 +1,24 @@
+from pathlib import Path
+
+
 def fetch_brawl_stars(endpoint: str, output: str) -> str:
 	return f"wget --header=\"Authorization: Bearer $BSTOK\" -qO- 'https://api.brawlstars.com/v1/{endpoint}' | jq '.' > {output}"
 
 
 # Every crawl dataset on disk, discovered rather than listed, so a new
-# crawl_<name>.json is picked up without editing this file.
-CRAWLS = sorted(glob_wildcards("data/crawl_{crawl}.json").crawl)
+# crawl_<name>.json(.gz) is picked up without editing this file. Some crawls
+# are committed gzipped (they're large, best-effort scrapes) -- glob both
+# extensions so a `.gz`-only crawl still shows up.
+CRAWLS = sorted(
+	set(glob_wildcards("data/crawl_{crawl}.json").crawl)
+	| set(glob_wildcards("data/crawl_{crawl}.json.gz").crawl)
+)
+
+
+def crawl_path(crawl: str) -> str:
+	"""Resolve a crawl name to its on-disk file: plain `.json` if present, else `.json.gz`."""
+	plain = f"data/crawl_{crawl}.json"
+	return plain if Path(plain).exists() else f"data/crawl_{crawl}.json.gz"
 
 
 rule brawlers:
@@ -90,7 +104,7 @@ rule brawler_classes:
 
 rule winrates:
 	input:
-		"data/crawl_{leg}.json"
+		lambda wildcards: crawl_path(wildcards.leg)
 	output:
 		"data/winrates_{leg}.json"
 	shell:
@@ -99,7 +113,7 @@ rule winrates:
 
 rule pickrates:
 	input:
-		"data/crawl_{leg}.json"
+		lambda wildcards: crawl_path(wildcards.leg)
 	output:
 		"data/pickrates_{leg}.json"
 	shell:
@@ -137,7 +151,7 @@ rule events:
 	`just crawl-artifacts <crawl>`.
 	"""
 	input:
-		expand("data/crawl_{crawl}.json", crawl=CRAWLS)
+		[crawl_path(crawl) for crawl in CRAWLS]
 	output:
 		update("data/events.json")
 	shell:

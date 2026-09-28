@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 
@@ -109,6 +110,21 @@ class TestDataset:
         db2 = Dataset.load(path)
         assert db2.stats == {}
         assert db2.seen_tags == set()
+
+    def test_load_gzipped_dataset(self, tmp_path: Path):
+        db = Dataset.from_seed({"#A"})
+        comp = Composition(1, frozenset({1, 2, 3}), frozenset({4, 5, 6}))
+        db.stats[comp] = WinLoss(a_wins=10, total=17)
+
+        plain_path = tmp_path / "dataset.json"
+        db.save(plain_path)
+        gz_path = tmp_path / "dataset.json.gz"
+        with gzip.open(gz_path, "wt") as f:
+            f.write(plain_path.read_text())
+
+        db2 = Dataset.load(gz_path)
+        assert db2.seen_tags == db.seen_tags
+        assert db2.stats[comp] == WinLoss(a_wins=10, total=17)
 
 
 class TestMergeStats:

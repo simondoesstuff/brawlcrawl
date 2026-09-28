@@ -368,7 +368,8 @@ def train(
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
     if winrates_file is None:
-        winrates_file = battles_file.with_name(battles_file.name.replace("crawl_", "winrates_", 1))
+        crawl_name = battles_file.name.removesuffix(".gz")
+        winrates_file = battles_file.with_name(crawl_name.replace("crawl_", "winrates_", 1))
 
     n_devices = jax.local_device_count()
     devices = mesh_utils.create_device_mesh((n_devices,))

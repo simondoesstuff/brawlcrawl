@@ -1,3 +1,4 @@
+import gzip
 import json
 import math
 from dataclasses import dataclass, field
@@ -132,7 +133,9 @@ class Dataset:
 
     @classmethod
     def load(cls, path: Path) -> "Dataset":
-        data = cast(_DatasetJson, json.loads(path.read_text()))
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rt") as f:
+            data = cast(_DatasetJson, json.load(f))
         stats: dict[Composition, WinLoss] = {}
         for entry in data["stats"]:
             comp = Composition(

@@ -1,5 +1,6 @@
 """Data loading, feature extraction, and train/val splitting for the ML pipeline."""
 
+import gzip
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,13 @@ import numpy as np
 _DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 _WINRATES_FILE = "winrates_leg1_20260827.json"
+
+
+def _load_crawl(path: Path):
+    """Load a `crawl_{leg}.json` battles file, transparently decompressing a `.gz` one."""
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as f:
+        return json.load(f)
 
 
 @dataclass(frozen=True)
@@ -213,7 +221,7 @@ def load_battles(
     events: list[dict] = json.loads((data_dir / "events.json").read_text())
     event_mode: dict[int, int] = {e["id"]: e["modeId"] for e in events}
 
-    raw: dict = json.loads(battles_file.read_text())
+    raw: dict = _load_crawl(battles_file)
     _check_events_known({b["event_id"] for b in raw["stats"]}, vocabs, battles_file, data_dir)
     battles: list[dict] = raw["stats"]
 

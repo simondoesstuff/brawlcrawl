@@ -32,8 +32,12 @@ jobs:
       - name: Generate web build inputs
         run: just web-data
 
+      # Run from the repo root, NOT `working-directory: web` -- the Vercel
+      # project's Root Directory is set to "web", so the CLI already adds
+      # that segment itself. Running from inside web/ too would double it
+      # to web/web and silently build nothing (see git history for the
+      # incident where this happened).
       - name: Deploy to Vercel
-        working-directory: web
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
